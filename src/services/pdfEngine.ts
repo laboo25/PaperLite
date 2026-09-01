@@ -25,6 +25,15 @@ export interface PageDimension {
   aspectRatio: number;
 }
 
+export interface PageTextItem {
+  str: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontSize: number;
+}
+
 export interface CanvasRenderSession {
   task: any | null;
   renderPromise: Promise<void> | null;
@@ -35,6 +44,7 @@ class PDFEngineInstance {
   private pdfDocument: pdfjsLib.PDFDocumentProxy | null = null;
   private pageDimensions: Map<number, PageDimension> = new Map();
   private pageTextCache: Map<number, string> = new Map();
+  private pageItemsCache: Map<number, PageTextItem[]> = new Map();
   // Tracks active render sessions per HTMLCanvasElement
   private canvasSessions: WeakMap<HTMLCanvasElement, CanvasRenderSession> = new WeakMap();
 
@@ -47,6 +57,7 @@ class PDFEngineInstance {
     this.cancelAllRenders();
     this.pageDimensions.clear();
     this.pageTextCache.clear();
+    this.pageItemsCache.clear();
 
     const loadingTask = pdfjsLib.getDocument(
       typeof data === 'string' ? { url: data } : { data }
@@ -236,6 +247,52 @@ class PDFEngineInstance {
     } catch (err) {
       console.warn(`Error extracting text for page ${pageNumber}:`, err);
       return '';
+    }
+  }
+
+  async getPageTextItems(pageNumber: number): Promise<PageTextItem[]> {
+    if (this.pageItemsCache.has(pageNumber)) {
+      return this.pageItemsCache.get(pageNumber)!;
+    }
+    if (!this.pdfDocument) return [];
+
+    try {
+      const page = await this.pdfDocument.getPage(pageNumber);
+      const viewport = page.getViewport({ scale: 1.0 });
+      const textContent = await page.getTextContent();
+      const items: PageTextItem[] = [];
+
+      for (const rawItem of textContent.items as any[]) {
+        if (!('str' in rawItem) || !rawItem.str) continue;
+        const transform = rawItem.transform;
+        const tx = transform[4];
+        const ty = transform[5];
+        const [vx, vy] = viewport.convertToViewportPoint(tx, ty);
+
+        // Font size calculation from affine transformation matrix
+        const fontSize = Math.max(8, Math.sqrt(transform[0] * transform[0] + transform[1] * transform[1]));
+        const height = rawItem.height || fontSize;
+        const width = rawItem.width || (rawItem.str.length * fontSize * 0.55);
+
+        // Screen top position (vy is baseline)
+        const y = Math.max(0, vy - height);
+        const x = Math.max(0, vx);
+
+        items.push({
+          str: rawItem.str,
+          x,
+          y,
+          width,
+          height,
+          fontSize
+        });
+      }
+
+      this.pageItemsCache.set(pageNumber, items);
+      return items;
+    } catch (err) {
+      console.warn(`Error extracting text items for page ${pageNumber}:`, err);
+      return [];
     }
   }
 

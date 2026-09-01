@@ -58,6 +58,20 @@
   user-select: none;
 }
 
+/* PDF Text Selection Styling */
+.pdf-text-layer ::selection {
+  background: rgba(59, 130, 246, 0.35);
+  color: transparent;
+}
+
+.pdf-text-layer span {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+
 /* iOS Glass blur effects */
 .ios-glass {
   background: rgba(255, 255, 255, 0.78);

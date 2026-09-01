@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { pdfEngine } from '../services/pdfEngine';
+import { pdfEngine, PageTextItem } from '../services/pdfEngine';
 import { AnnotationTool, PDFAnnotation, ReaderTheme } from '../types';
-import { MessageSquare, Trash2, X } from 'lucide-react';
+import { MessageSquare, Trash2, X, Check } from 'lucide-react';
 
 interface PageCanvasProps {
   pageNumber: number;
@@ -37,15 +37,23 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
   const [isVisible, setIsVisible] = useState(!onVisibleChange);
   const [isLoading, setIsLoading] = useState(true);
   const [dimensions, setDimensions] = useState({ width: 595, height: 842 });
+  const [textItems, setTextItems] = useState<PageTextItem[]>([]);
+
+  // Pen Drawing state
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentStroke, setCurrentStroke] = useState<{ x: number; y: number }[]>([]);
-  const [activeNotePopup, setActiveNotePopup] = useState<string | null>(null);
 
-  // New Note state
+  // Area Highlight Dragging state
+  const [isHighlightDragging, setIsHighlightDragging] = useState(false);
+  const [highlightStart, setHighlightStart] = useState<{ x: number; y: number } | null>(null);
+  const [highlightCurrent, setHighlightCurrent] = useState<{ x: number; y: number } | null>(null);
+
+  // Sticky Note state
+  const [activeNotePopup, setActiveNotePopup] = useState<string | null>(null);
   const [newNotePos, setNewNotePos] = useState<{ x: number; y: number } | null>(null);
   const [newNoteText, setNewNoteText] = useState('');
 
-  // Fetch dimensions once
+  // Fetch page dimensions and text content items
   useEffect(() => {
     let isMounted = true;
     pdfEngine.getPageDimension(pageNumber).then((dim) => {
@@ -53,12 +61,19 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
         setDimensions({ width: dim.width, height: dim.height });
       }
     });
+
+    pdfEngine.getPageTextItems(pageNumber).then((items) => {
+      if (isMounted) {
+        setTextItems(items);
+      }
+    });
+
     return () => {
       isMounted = false;
     };
   }, [pageNumber]);
 
-  // Setup Intersection Observer for viewport virtualization & memory recycling
+  // Viewport virtualization & memory recycling
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -74,7 +89,7 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
       },
       {
         root: null,
-        rootMargin: '300px 0px 300px 0px', // Buffer 300px above and below
+        rootMargin: '300px 0px 300px 0px',
         threshold: 0.01
       }
     );
@@ -86,13 +101,12 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
     };
   }, [pageNumber, onVisibleChange]);
 
-  // Render canvas when visible; recycle memory when off-screen
+  // Render canvas when visible
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     if (!isVisible) {
-      // Free VRAM when scrolled out
       pdfEngine.cleanupPageCanvas(canvas, pageNumber);
       return;
     }
@@ -116,7 +130,7 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
       .catch((err) => {
         if (!isCancelled) {
           setIsLoading(false);
-          console.warn(`Render page ${pageNumber} caught:`, err);
+          console.warn(`Render page ${pageNumber} notice:`, err);
         }
       });
 
@@ -126,7 +140,7 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
     };
   }, [pageNumber, scale, rotation, renderQuality, isVisible]);
 
-  // Redraw annotation ink canvas
+  // Redraw Pen Ink Canvas
   useEffect(() => {
     const dCanvas = drawCanvasRef.current;
     if (!dCanvas) return;
@@ -138,13 +152,16 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
 
     ctx.clearRect(0, 0, dCanvas.width, dCanvas.height);
 
-    // Draw saved ink strokes
-    const pageInks = annotations.filter((a) => a.pageNumber === pageNumber && a.type === 'pen' && a.drawingPoints);
+    // Draw saved ink strokes for this page
+    const pageInks = annotations.filter(
+      (a) => a.pageNumber === pageNumber && a.type === 'pen' && a.drawingPoints
+    );
+
     for (const ink of pageInks) {
       if (!ink.drawingPoints || ink.drawingPoints.length < 2) continue;
       ctx.beginPath();
       ctx.strokeStyle = ink.color;
-      ctx.lineWidth = (ink.strokeWidth || 2) * scale;
+      ctx.lineWidth = (ink.strokeWidth || 2.5) * scale;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
 
@@ -155,7 +172,7 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
       ctx.stroke();
     }
 
-    // Draw current active stroke
+    // Draw active drawing stroke in real-time
     if (currentStroke.length > 1) {
       ctx.beginPath();
       ctx.strokeStyle = activeColor;
@@ -171,43 +188,54 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
     }
   }, [annotations, currentStroke, pageNumber, scale, dimensions, activeColor]);
 
-  // Handle pointer drawing & interactions
+  // Pointer Down (Pen drawing / Sticky note / Area highlight)
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = (e.clientX - rect.left) / scale;
+    const y = (e.clientY - rect.top) / scale;
+
     if (activeTool === 'pen') {
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const x = (e.clientX - rect.left) / scale;
-      const y = (e.clientY - rect.top) / scale;
       setIsDrawing(true);
       setCurrentStroke([{ x, y }]);
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     } else if (activeTool === 'note') {
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const x = (e.clientX - rect.left) / scale;
-      const y = (e.clientY - rect.top) / scale;
       setNewNotePos({ x, y });
       setNewNoteText('');
+    } else if (activeTool === 'highlight') {
+      // Check if user clicked on background to start area highlight drag
+      const target = e.target as HTMLElement;
+      if (target.tagName !== 'SPAN') {
+        setIsHighlightDragging(true);
+        setHighlightStart({ x, y });
+        setHighlightCurrent({ x, y });
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      }
     }
   };
 
+  // Pointer Move
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = (e.clientX - rect.left) / scale;
+    const y = (e.clientY - rect.top) / scale;
+
     if (isDrawing && activeTool === 'pen') {
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const x = (e.clientX - rect.left) / scale;
-      const y = (e.clientY - rect.top) / scale;
       setCurrentStroke((prev) => [...prev, { x, y }]);
+    } else if (isHighlightDragging && activeTool === 'highlight') {
+      setHighlightCurrent({ x, y });
     }
   };
 
+  // Pointer Up
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (isDrawing && activeTool === 'pen') {
       setIsDrawing(false);
       try {
-        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
       } catch {
-        // ignore
+        // Ignored
       }
 
       if (currentStroke.length > 1) {
@@ -222,10 +250,38 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
         });
       }
       setCurrentStroke([]);
+    } else if (isHighlightDragging && activeTool === 'highlight') {
+      setIsHighlightDragging(false);
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {
+        // Ignored
+      }
+
+      if (highlightStart && highlightCurrent) {
+        const x1 = Math.min(highlightStart.x, highlightCurrent.x);
+        const y1 = Math.min(highlightStart.y, highlightCurrent.y);
+        const w = Math.abs(highlightCurrent.x - highlightStart.x);
+        const h = Math.abs(highlightCurrent.y - highlightStart.y);
+
+        // Only save if drag was meaningful (greater than 12x12px)
+        if (w > 12 && h > 10) {
+          onAddAnnotation({
+            id: 'hl-box-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+            pageNumber,
+            type: 'highlight',
+            color: activeColor,
+            rects: [{ x: x1, y: y1, width: w, height: h }],
+            createdAt: Date.now()
+          });
+        }
+      }
+      setHighlightStart(null);
+      setHighlightCurrent(null);
     }
   };
 
-  // Submit Note
+  // Save new Sticky Note
   const saveNewNote = () => {
     if (!newNotePos || !newNoteText.trim()) {
       setNewNotePos(null);
@@ -247,6 +303,9 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
   };
 
   const pageAnnotations = annotations.filter((a) => a.pageNumber === pageNumber);
+  const highlightAnnotations = pageAnnotations.filter(
+    (a) => (a.type === 'highlight' || a.type === 'underline') && a.rects && a.rects.length > 0
+  );
   const noteAnnotations = pageAnnotations.filter((a) => a.type === 'note' && a.position);
 
   const displayWidth = dimensions.width * scale;
@@ -257,8 +316,14 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
       ref={containerRef}
       id={`page-container-${pageNumber}`}
       data-page-number={pageNumber}
-      className={`relative mx-auto rounded-xs shadow-md transition-shadow select-none group ${
-        activeTool === 'pen' ? 'cursor-crosshair' : activeTool === 'note' ? 'cursor-cell' : 'cursor-text'
+      className={`relative mx-auto rounded-xs shadow-md transition-shadow group ${
+        activeTool === 'pen'
+          ? 'cursor-crosshair'
+          : activeTool === 'note'
+          ? 'cursor-cell'
+          : activeTool === 'highlight'
+          ? 'cursor-text'
+          : 'cursor-text'
       }`}
       style={{
         width: `${displayWidth}px`,
@@ -269,6 +334,7 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
     >
       {/* Skeleton Loading State */}
       {isLoading && (
@@ -278,23 +344,104 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
         </div>
       )}
 
-      {/* Main High-DPI PDF.js Render Canvas */}
+      {/* Main High-DPI PDF.js Canvas */}
       <canvas
         ref={canvasRef}
-        className="absolute top-0 left-0 block rounded-xs"
+        className="absolute top-0 left-0 block rounded-xs select-none pointer-events-none"
         style={{
           width: `${displayWidth}px`,
           height: `${displayHeight}px`
         }}
       />
 
-      {/* Ink Drawing Overlay Canvas */}
-      <canvas
-        ref={drawCanvasRef}
-        className="absolute top-0 left-0 pointer-events-none z-10"
+      {/* Saved Highlights and Underlines Overlay */}
+      {highlightAnnotations.map((hl) => (
+        <div key={hl.id} className="absolute inset-0 pointer-events-none z-15">
+          {hl.rects?.map((r, rIdx) => (
+            <div
+              key={rIdx}
+              className={`absolute transition-opacity rounded-xs ${
+                activeTool === 'eraser'
+                  ? 'pointer-events-auto cursor-pointer hover:opacity-100 hover:ring-2 hover:ring-rose-500'
+                  : 'pointer-events-none'
+              }`}
+              style={{
+                left: `${r.x * scale}px`,
+                top: `${r.y * scale}px`,
+                width: `${r.width * scale}px`,
+                height: `${r.height * scale}px`,
+                backgroundColor: hl.type === 'highlight' ? hl.color : 'transparent',
+                borderBottom: hl.type === 'underline' ? `3px solid ${hl.color}` : 'none',
+                opacity: hl.type === 'highlight' ? 0.45 : 1,
+                mixBlendMode: 'multiply'
+              }}
+              title={hl.text ? `"${hl.text}"` : 'Highlight'}
+              onClick={(e) => {
+                if (activeTool === 'eraser') {
+                  e.stopPropagation();
+                  onDeleteAnnotation(hl.id);
+                }
+              }}
+            />
+          ))}
+        </div>
+      ))}
+
+      {/* Interactive Selectable Text Layer */}
+      <div
+        className={`pdf-text-layer absolute inset-0 z-20 overflow-hidden leading-none ${
+          activeTool === 'select' || activeTool === 'highlight'
+            ? 'pointer-events-auto select-text'
+            : 'pointer-events-none select-none'
+        }`}
         style={{
           width: `${displayWidth}px`,
           height: `${displayHeight}px`
+        }}
+      >
+        {textItems.map((item, idx) => (
+          <span
+            key={idx}
+            style={{
+              left: `${item.x * scale}px`,
+              top: `${item.y * scale}px`,
+              width: item.width ? `${item.width * scale}px` : 'auto',
+              height: item.height ? `${item.height * scale}px` : `${item.fontSize * scale}px`,
+              fontSize: `${item.fontSize * scale}px`,
+              fontFamily: 'sans-serif'
+            }}
+          >
+            {item.str}
+          </span>
+        ))}
+      </div>
+
+      {/* Live Area Highlight Drag Preview */}
+      {isHighlightDragging && highlightStart && highlightCurrent && (
+        <div
+          className="absolute z-25 pointer-events-none border border-dashed border-stone-800/40 rounded-xs"
+          style={{
+            left: `${Math.min(highlightStart.x, highlightCurrent.x) * scale}px`,
+            top: `${Math.min(highlightStart.y, highlightCurrent.y) * scale}px`,
+            width: `${Math.abs(highlightCurrent.x - highlightStart.x) * scale}px`,
+            height: `${Math.abs(highlightCurrent.y - highlightStart.y) * scale}px`,
+            backgroundColor: activeColor,
+            opacity: 0.45,
+            mixBlendMode: 'multiply'
+          }}
+        />
+      )}
+
+      {/* Pen Ink Overlay Canvas */}
+      <canvas
+        ref={drawCanvasRef}
+        className={`absolute top-0 left-0 z-30 ${
+          activeTool === 'pen' ? 'pointer-events-auto cursor-crosshair' : 'pointer-events-none'
+        }`}
+        style={{
+          width: `${displayWidth}px`,
+          height: `${displayHeight}px`,
+          touchAction: 'none'
         }}
       />
 
@@ -307,54 +454,71 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
         return (
           <div
             key={note.id}
-            className="absolute z-20"
+            className="absolute z-40"
             style={{ left: `${left}px`, top: `${top}px` }}
           >
             {/* Note Pin Icon */}
             <button
               onClick={(e) => {
                 e.stopPropagation();
+                if (activeTool === 'eraser') {
+                  onDeleteAnnotation(note.id);
+                  return;
+                }
                 setActiveNotePopup(isSelected ? null : note.id);
               }}
-              className="p-1 rounded-full shadow-md transform -translate-x-1/2 -translate-y-1/2 hover:scale-125 transition-transform"
-              style={{ backgroundColor: note.color }}
+              className={`p-1.5 rounded-full shadow-md transform -translate-x-1/2 -translate-y-1/2 hover:scale-125 transition-transform border border-black/10 ${
+                activeTool === 'eraser' ? 'hover:bg-rose-500 hover:text-white' : ''
+              }`}
+              style={{ backgroundColor: activeTool === 'eraser' ? undefined : note.color }}
+              title={activeTool === 'eraser' ? 'Click to delete note' : 'Click to read note'}
             >
-              <MessageSquare className="w-3.5 h-3.5 text-stone-900 fill-stone-900/40" />
+              {activeTool === 'eraser' ? (
+                <Trash2 className="w-3.5 h-3.5 text-rose-600 hover:text-white" />
+              ) : (
+                <MessageSquare className="w-3.5 h-3.5 text-stone-900 fill-stone-900/40" />
+              )}
             </button>
 
             {/* Note Popup Window */}
             {isSelected && (
               <div
-                className="absolute left-4 top-2 w-56 p-2.5 rounded-xl bg-white shadow-xl border border-stone-200 text-xs z-30 space-y-2 animate-in fade-in zoom-in-95 duration-150"
+                className="absolute left-4 top-2 w-60 p-3 rounded-2xl bg-white shadow-2xl border border-stone-200 text-xs z-50 space-y-2.5 animate-in fade-in zoom-in-95 duration-150"
                 onClick={(e) => e.stopPropagation()}
               >
-                <div className="flex items-center justify-between border-b border-stone-100 pb-1.5">
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-stone-500">
-                    Sticky Note
-                  </span>
+                <div className="flex items-center justify-between border-b border-stone-100 pb-2">
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="w-2.5 h-2.5 rounded-full"
+                      style={{ backgroundColor: note.color }}
+                    />
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-stone-600">
+                      Sticky Note
+                    </span>
+                  </div>
                   <div className="flex items-center gap-1">
                     <button
                       onClick={() => onDeleteAnnotation(note.id)}
-                      className="p-0.5 text-stone-400 hover:text-rose-500 rounded"
+                      className="p-1 text-stone-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
                       title="Delete Note"
                     >
-                      <Trash2 className="w-3 h-3" />
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
                     <button
                       onClick={() => setActiveNotePopup(null)}
-                      className="p-0.5 text-stone-400 hover:text-stone-700 rounded"
+                      className="p-1 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-md transition-colors"
                     >
-                      <X className="w-3 h-3" />
+                      <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
 
-                <p className="text-stone-800 text-xs leading-relaxed whitespace-pre-wrap">
+                <p className="text-stone-800 text-xs leading-relaxed whitespace-pre-wrap font-normal">
                   {note.comment}
                 </p>
 
-                <div className="text-[9px] text-stone-400 font-mono">
-                  {new Date(note.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                <div className="text-[9px] text-stone-400 font-mono pt-1 border-t border-stone-50">
+                  {new Date(note.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • Page {pageNumber}
                 </div>
               </div>
             )}
@@ -362,53 +526,68 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
         );
       })}
 
-      {/* Adding a new sticky note popup */}
+      {/* Adding a new sticky note popup modal */}
       {newNotePos && (
         <div
-          className="absolute z-30 w-60 p-2.5 rounded-xl bg-white shadow-2xl border border-blue-400/80 text-xs space-y-2"
+          className="absolute z-50 w-64 p-3 rounded-2xl bg-white shadow-2xl border border-blue-500/80 text-xs space-y-2.5 animate-in fade-in zoom-in-95 duration-150"
           style={{
-            left: `${Math.min(displayWidth - 250, Math.max(10, newNotePos.x * scale))}px`,
-            top: `${Math.min(displayHeight - 120, Math.max(10, newNotePos.y * scale))}px`
+            left: `${Math.min(displayWidth - 270, Math.max(10, newNotePos.x * scale))}px`,
+            top: `${Math.min(displayHeight - 140, Math.max(10, newNotePos.y * scale))}px`
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="flex items-center justify-between text-[10px] font-semibold text-stone-600">
-            <span>New Note</span>
+          <div className="flex items-center justify-between text-[11px] font-bold text-stone-700">
+            <div className="flex items-center gap-1.5">
+              <span
+                className="w-2.5 h-2.5 rounded-full"
+                style={{ backgroundColor: activeColor }}
+              />
+              <span>New Sticky Note</span>
+            </div>
             <button
               onClick={() => setNewNotePos(null)}
-              className="text-stone-400 hover:text-stone-700"
+              className="text-stone-400 hover:text-stone-700 p-0.5 rounded-md"
             >
-              <X className="w-3 h-3" />
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
           <textarea
             value={newNoteText}
             onChange={(e) => setNewNoteText(e.target.value)}
-            placeholder="Type your comment or thoughts..."
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                saveNewNote();
+              }
+            }}
+            placeholder="Type your comment (Ctrl+Enter to save)..."
             rows={3}
-            className="w-full p-2 text-xs rounded-lg border border-stone-200 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none bg-stone-50"
+            className="w-full p-2 text-xs rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-none bg-stone-50 text-stone-800"
             autoFocus
           />
-          <div className="flex justify-end gap-1.5">
-            <button
-              onClick={() => setNewNotePos(null)}
-              className="px-2 py-1 text-[11px] text-stone-500 hover:text-stone-800 rounded-md"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={saveNewNote}
-              disabled={!newNoteText.trim()}
-              className="px-2.5 py-1 text-[11px] font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-md disabled:opacity-40"
-            >
-              Add Note
-            </button>
+          <div className="flex items-center justify-between pt-1">
+            <span className="text-[9px] text-stone-400 font-mono">Page {pageNumber}</span>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setNewNotePos(null)}
+                className="px-2.5 py-1 text-[11px] font-medium text-stone-500 hover:text-stone-800 hover:bg-stone-100 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveNewNote}
+                disabled={!newNoteText.trim()}
+                className="px-3 py-1 text-[11px] font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-40 shadow-xs transition-colors flex items-center gap-1"
+              >
+                <Check className="w-3 h-3" />
+                <span>Save</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
 
       {/* Corner Page Number Indicator badge on hover */}
-      <div className="absolute right-2 bottom-2 px-1.5 py-0.5 rounded-md bg-black/40 text-white text-[10px] font-mono opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+      <div className="absolute right-2 bottom-2 px-1.5 py-0.5 rounded-md bg-black/40 text-white text-[10px] font-mono opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none select-none">
         {pageNumber}
       </div>
     </div>

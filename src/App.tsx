@@ -561,6 +561,10 @@ export default function App() {
             onPageChange={handlePageChange}
             onAddAnnotation={handleAddAnnotation}
             onDeleteAnnotation={handleDeleteAnnotation}
+            onSearchQuery={(q) => {
+              handleSearchQueryChange(q);
+              handleUpdateSettings({ showSidebar: true, sidebarTab: 'search' });
+            }}
           />
         )}
 
