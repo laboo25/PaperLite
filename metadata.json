@@ -1,0 +1,6 @@
+{
+  "name": "PaperLite PDF Reader",
+  "description": "A lightweight, iOS-inspired minimal desktop PDF reader with fast local file system access, page virtualization, annotations, and document indexing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
