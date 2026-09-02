@@ -1,22 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
-  FolderOpen,
-  Library,
-  Sidebar as SidebarIcon,
-  Search,
-  Bookmark,
-  FileText,
-  Sliders,
-  Share2,
-  SlidersHorizontal,
-  ChevronDown,
-  ChevronUp,
+  Home,
+  Plus,
   X,
   Minus,
   Square,
-  Copy
+  Copy,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
-import { PDFDocumentInfo, ReaderSettings } from '../types';
+import { PDFTabItem } from '../types';
+import { PDFDocIcon } from './PDFDocIcon';
 import {
   closeWindow,
   minimizeWindow,
@@ -25,55 +19,69 @@ import {
 } from '../services/tauriWindow';
 
 interface TitleBarProps {
-  currentDoc: PDFDocumentInfo | null;
-  currentPage: number;
-  totalPages: number;
-  settings: ReaderSettings;
-  isBookmarked: boolean;
-  isControllerBarOpen: boolean;
-  onToggleSidebar: () => void;
-  onToggleControllerBar: () => void;
-  onOpenLibrary: () => void;
-  onOpenFile: () => void;
-  onToggleBookmark: () => void;
-  onOpenSearch: () => void;
-  onUpdateSettings: (settings: Partial<ReaderSettings>) => void;
-  onOpenSettingsModal: () => void;
-  onOpenExportModal: () => void;
+  tabs: PDFTabItem[];
+  activeTabId: string | null;
+  isHomeActive: boolean;
+  onSelectTab: (tabId: string) => void;
+  onCloseTab: (tabId: string, e: React.MouseEvent) => void;
+  onNewTab: () => void;
+  onToggleHome: () => void;
 }
 
 export const TitleBar: React.FC<TitleBarProps> = ({
-  currentDoc,
-  currentPage,
-  totalPages,
-  settings,
-  isBookmarked,
-  isControllerBarOpen,
-  onToggleSidebar,
-  onToggleControllerBar,
-  onOpenLibrary,
-  onOpenFile,
-  onToggleBookmark,
-  onOpenSearch,
-  onOpenSettingsModal,
-  onOpenExportModal
+  tabs,
+  activeTabId,
+  isHomeActive,
+  onSelectTab,
+  onCloseTab,
+  onNewTab,
+  onToggleHome
 }) => {
   const [isMaximized, setIsMaximized] = useState(false);
-
-  const isTwoPage = settings.viewMode === 'two-page';
-  const currentLeft = currentPage % 2 === 0 ? currentPage - 1 : currentPage;
-  const currentRight = currentLeft + 1;
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+  const tabsScrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     isWindowMaximized().then(setIsMaximized);
 
     const handleResize = () => {
       isWindowMaximized().then(setIsMaximized);
+      checkScroll();
     };
 
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  const checkScroll = () => {
+    if (tabsScrollRef.current) {
+      const { scrollLeft, scrollWidth, clientWidth } = tabsScrollRef.current;
+      setCanScrollLeft(scrollLeft > 4);
+      setCanScrollRight(scrollLeft + clientWidth < scrollWidth - 4);
+    }
+  };
+
+  useEffect(() => {
+    checkScroll();
+  }, [tabs, activeTabId]);
+
+  // Scroll active tab into view smoothly
+  useEffect(() => {
+    if (activeTabId && tabsScrollRef.current) {
+      const activeEl = tabsScrollRef.current.querySelector(`[data-tab-id="${activeTabId}"]`);
+      if (activeEl) {
+        activeEl.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+      }
+    }
+  }, [activeTabId]);
+
+  const handleScroll = (direction: 'left' | 'right') => {
+    if (tabsScrollRef.current) {
+      const delta = direction === 'left' ? -180 : 180;
+      tabsScrollRef.current.scrollBy({ left: delta, behavior: 'smooth' });
+    }
+  };
 
   const handleClose = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -106,196 +114,183 @@ export const TitleBar: React.FC<TitleBarProps> = ({
       id="app-titlebar"
       data-tauri-drag-region
       onDoubleClick={handleDoubleClick}
-      className="h-10 w-full flex items-center justify-between px-2.5 sm:px-3 select-none z-30 border-b border-black/[0.07] bg-white/95 backdrop-blur-xl transition-colors cursor-default"
+      className="h-11 w-full flex items-center justify-between px-2 py-1 select-none z-30 border-b border-black/[0.08] bg-stone-100/95 backdrop-blur-xl transition-colors cursor-default relative"
       style={{ WebkitAppRegion: 'drag' } as any}
     >
-      {/* Left section: App Branding + Nav/File Actions (No window control dots here) */}
+      {/* Left Section: Home Page Button */}
       <div
-        className="flex items-center gap-1.5 sm:gap-2 shrink-0"
+        className="flex items-center gap-1.5 shrink-0 mr-1.5"
         data-tauri-drag-region="false"
         style={{ WebkitAppRegion: 'no-drag' } as any}
       >
-        {/* App Logo / Brand */}
-        <div className="flex items-center gap-1.5 mr-1 select-none">
-          <div className="w-5 h-5 rounded-md bg-blue-600 flex items-center justify-center text-white shadow-2xs">
-            <FileText className="w-3 h-3 stroke-[2.5]" />
-          </div>
-          <span className="text-xs font-semibold text-stone-800 tracking-tight hidden sm:inline">
-            PaperLite
-          </span>
-        </div>
-
-        {/* Sidebar Toggle Button */}
         <button
-          id="btn-toggle-sidebar"
-          onClick={onToggleSidebar}
-          title="Toggle Navigation Sidebar (Cmd+B)"
-          className={`p-1.5 rounded-lg transition-all ${
-            settings.showSidebar
-              ? 'bg-stone-200 text-stone-900 shadow-2xs'
-              : 'text-stone-600 hover:bg-stone-100 hover:text-stone-900'
+          id="btn-home-tab"
+          onClick={onToggleHome}
+          title="Home & Document Workspace (Cmd+H)"
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
+            isHomeActive
+              ? 'bg-blue-600 text-white shadow-xs font-semibold'
+              : 'text-stone-700 hover:bg-stone-200/80 active:bg-stone-300/80'
           }`}
         >
-          <SidebarIcon className="w-4 h-4" />
+          <Home className="w-3.5 h-3.5 shrink-0" />
+          <span className="hidden sm:inline">Home</span>
         </button>
 
-        {/* Library Button */}
-        <button
-          id="btn-open-library"
-          onClick={onOpenLibrary}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-stone-700 bg-stone-100/90 hover:bg-stone-200/80 border border-stone-200/80 transition-all shadow-2xs"
-          title="Browse PDF Library (Cmd+L)"
-        >
-          <Library className="w-3.5 h-3.5 text-stone-600" />
-          <span className="hidden sm:inline">Library</span>
-        </button>
-
-        {/* Open File Button */}
-        <button
-          id="btn-open-file"
-          onClick={onOpenFile}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-stone-700 bg-stone-100/90 hover:bg-stone-200/80 border border-stone-200/80 transition-all shadow-2xs"
-          title="Open PDF from Computer (Cmd+O)"
-        >
-          <FolderOpen className="w-3.5 h-3.5 text-stone-600" />
-          <span className="hidden md:inline">Open</span>
-        </button>
+        <div className="h-4 w-px bg-stone-300/80 mx-0.5" />
       </div>
 
-      {/* Center section: Document Title & Page Counter (Draggable region) */}
+      {/* Middle Section: Fully Responsive Tabs Strip with Scroll Controls */}
       <div
-        data-tauri-drag-region
-        className="flex-1 max-w-md mx-2 flex items-center justify-center min-w-0"
-        style={{ WebkitAppRegion: 'drag' } as any}
+        className="flex-1 flex items-center min-w-0 relative overflow-hidden py-1"
+        data-tauri-drag-region="false"
+        style={{ WebkitAppRegion: 'no-drag' } as any}
       >
+        {/* Left Scroll Chevron */}
+        {canScrollLeft && (
+          <button
+            onClick={() => handleScroll('left')}
+            className="absolute left-0 top-1/2 -translate-y-1/2 z-20 w-5 h-7 bg-stone-100/90 hover:bg-white shadow-xs rounded-r-lg flex items-center justify-center text-stone-600 hover:text-stone-900 border-r border-stone-300/60 transition-colors cursor-pointer"
+            title="Scroll tabs left"
+          >
+            <ChevronLeft className="w-3 h-3" />
+          </button>
+        )}
+
+        {/* Scrollable Tabs Track */}
         <div
-          data-tauri-drag-region
-          className="flex items-center gap-2 max-w-full px-2.5 py-0.5 rounded-lg bg-stone-100/90 border border-stone-200/70 text-xs text-stone-800 shadow-2xs select-none"
+          ref={tabsScrollRef}
+          onScroll={checkScroll}
+          className="flex-1 flex items-center gap-1.5 overflow-x-auto no-scrollbar scroll-smooth px-1.5 py-0.5"
         >
-          <FileText className="w-3.5 h-3.5 text-stone-500 shrink-0" />
-          <span className="font-medium truncate max-w-[120px] sm:max-w-[180px] md:max-w-[240px]">
-            {currentDoc ? currentDoc.name : 'No Document Opened'}
-          </span>
-          {totalPages > 0 && (
-            <span className="text-[11px] text-stone-500 font-mono shrink-0 pl-1.5 border-l border-stone-300">
-              {isTwoPage && currentRight <= totalPages
-                ? `${currentLeft}-${currentRight}`
-                : currentPage}{' '}
-              / {totalPages}
-            </span>
-          )}
+          {tabs.map((tab) => {
+            const isActive =
+              !isHomeActive &&
+              Boolean(activeTabId) &&
+              Boolean(tab.id) &&
+              tab.id === activeTabId;
+
+            return (
+              <div
+                key={tab.id}
+                data-tab-id={tab.id}
+                onClick={() => onSelectTab(tab.id)}
+                title={`${tab.doc.name} (Page ${tab.currentPage} of ${tab.totalPages})`}
+                className={`group relative flex items-center gap-2 h-7.5 min-w-[70px] sm:min-w-[95px] md:min-w-[130px] max-w-[200px] flex-1 sm:flex-initial px-2.5 rounded-xl text-xs transition-all cursor-pointer select-none border ${
+                  isActive
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-xs ring-1 ring-blue-500/30 z-10'
+                    : 'bg-stone-200/50 text-stone-600 border-stone-300/30 hover:bg-stone-200/85 hover:text-stone-800 hover:border-stone-300/60'
+                }`}
+              >
+                {/* Document Icon (Multi-resolution bundle icon) */}
+                <div className={`shrink-0 rounded-[3px] p-0.5 ${isActive ? 'bg-white/20' : ''}`}>
+                  <PDFDocIcon size={14} className="shrink-0" />
+                </div>
+
+                {/* Tab Title */}
+                <span
+                  className={`truncate flex-1 text-[11px] leading-tight ${
+                    isActive ? 'font-semibold text-white' : 'font-medium text-stone-600'
+                  }`}
+                >
+                  {tab.doc.name}
+                </span>
+
+                {/* Unsaved Edits Indicator Dot */}
+                {tab.isDirty && (
+                  <span
+                    title="Unsaved changes (Ctrl+S)"
+                    className={`w-1.5 h-1.5 rounded-full shrink-0 animate-pulse ${
+                      isActive ? 'bg-amber-300' : 'bg-amber-500'
+                    }`}
+                  />
+                )}
+
+                {/* Close Tab Button */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    onCloseTab(tab.id, e);
+                  }}
+                  title="Close Tab"
+                  aria-label="Close Tab"
+                  className={`w-4 h-4 rounded-lg flex items-center justify-center shrink-0 transition-colors cursor-pointer ${
+                    isActive
+                      ? 'text-white/80 hover:text-white hover:bg-blue-700/80 active:bg-blue-800'
+                      : 'text-stone-400 opacity-60 sm:opacity-0 group-hover:opacity-100 hover:text-rose-600 hover:bg-stone-300/60'
+                  }`}
+                >
+                  <X className="w-3 h-3 stroke-[2.5]" />
+                </button>
+              </div>
+            );
+          })}
+
+          {/* New Tab (+) Button */}
+          <button
+            id="btn-new-tab"
+            onClick={onNewTab}
+            title="Open New PDF in New Tab (Cmd+T / Cmd+O)"
+            aria-label="New Tab"
+            className="w-7 h-7 flex items-center justify-center rounded-xl bg-stone-200/40 hover:bg-white hover:shadow-2xs text-stone-600 hover:text-stone-900 border border-stone-300/40 hover:border-stone-300 active:bg-stone-300 transition-all shrink-0 cursor-pointer ml-0.5"
+          >
+            <Plus className="w-3.5 h-3.5 stroke-[2.2]" />
+          </button>
         </div>
+
+        {/* Right Scroll Chevron */}
+        {canScrollRight && (
+          <button
+            onClick={() => handleScroll('right')}
+            className="absolute right-0 top-1/2 -translate-y-1/2 z-20 w-5 h-7 bg-stone-100/90 hover:bg-white shadow-xs rounded-l-lg flex items-center justify-center text-stone-600 hover:text-stone-900 border-l border-stone-300/60 transition-colors cursor-pointer"
+            title="Scroll tabs right"
+          >
+            <ChevronRight className="w-3 h-3" />
+          </button>
+        )}
       </div>
 
-      {/* Right section: Toolbar actions + Single Unified Window Controller Buttons */}
+      {/* Right Section: Window Controller Buttons */}
       <div
-        className="flex items-center gap-1 sm:gap-1.5 shrink-0"
+        className="flex items-center gap-0.5 shrink-0 pl-1.5 border-l border-stone-300/80"
         data-tauri-drag-region="false"
         style={{ WebkitAppRegion: 'no-drag' } as any}
       >
-        {/* Toggle Controller Bar Toolbar */}
         <button
-          id="btn-toggle-controllerbar"
-          onClick={onToggleControllerBar}
-          title={isControllerBarOpen ? 'Hide Control Toolbar' : 'Show Control Toolbar'}
-          className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium transition-all ${
-            isControllerBarOpen
-              ? 'bg-blue-50 text-blue-600 border border-blue-200 shadow-2xs'
-              : 'bg-stone-100 text-stone-600 border border-stone-200/80 hover:bg-stone-200'
-          }`}
+          id="window-control-minimize"
+          onClick={handleMinimize}
+          title="Minimize Window"
+          aria-label="Minimize Window"
+          className="w-6.5 h-6.5 flex items-center justify-center text-stone-600 hover:text-stone-900 hover:bg-stone-200/80 active:bg-stone-300 rounded-md transition-colors cursor-pointer"
         >
-          <SlidersHorizontal className="w-3.5 h-3.5" />
-          <span className="hidden lg:inline">Controls</span>
-          {isControllerBarOpen ? (
-            <ChevronUp className="w-3 h-3 text-blue-500" />
+          <Minus className="w-3 h-3" />
+        </button>
+
+        <button
+          id="window-control-maximize"
+          onClick={handleMaximize}
+          title={isMaximized ? 'Restore Window' : 'Maximize Window'}
+          aria-label={isMaximized ? 'Restore Window' : 'Maximize Window'}
+          className="w-6.5 h-6.5 flex items-center justify-center text-stone-600 hover:text-stone-900 hover:bg-stone-200/80 active:bg-stone-300 rounded-md transition-colors cursor-pointer"
+        >
+          {isMaximized ? (
+            <Copy className="w-2.5 h-2.5 stroke-[2]" />
           ) : (
-            <ChevronDown className="w-3 h-3 text-stone-400" />
+            <Square className="w-2.5 h-2.5 stroke-[2]" />
           )}
         </button>
 
-        {/* Search button */}
         <button
-          id="btn-search"
-          onClick={onOpenSearch}
-          title="Search in document (Cmd+F)"
-          className="p-1.5 rounded-lg text-stone-600 hover:text-stone-900 hover:bg-stone-100 transition-all"
+          id="window-control-close"
+          onClick={handleClose}
+          title="Close Application"
+          aria-label="Close Application"
+          className="w-6.5 h-6.5 flex items-center justify-center text-stone-600 hover:text-white hover:bg-rose-500 active:bg-rose-600 rounded-md transition-colors cursor-pointer"
         >
-          <Search className="w-3.5 h-3.5" />
+          <X className="w-3 h-3 stroke-[2.2]" />
         </button>
-
-        {/* Bookmark toggle */}
-        <button
-          id="btn-bookmark"
-          onClick={onToggleBookmark}
-          title={isBookmarked ? 'Remove Bookmark (Cmd+D)' : 'Bookmark Page (Cmd+D)'}
-          className={`p-1.5 rounded-lg transition-all ${
-            isBookmarked
-              ? 'text-amber-500 bg-amber-50 hover:bg-amber-100'
-              : 'text-stone-600 hover:text-stone-900 hover:bg-stone-100'
-          }`}
-        >
-          <Bookmark className={`w-3.5 h-3.5 ${isBookmarked ? 'fill-amber-500' : ''}`} />
-        </button>
-
-        {/* Export / Share */}
-        <button
-          id="btn-export"
-          onClick={onOpenExportModal}
-          title="Export Notes & Bookmarks"
-          className="p-1.5 rounded-lg text-stone-600 hover:text-stone-900 hover:bg-stone-100 transition-all hidden sm:block"
-        >
-          <Share2 className="w-3.5 h-3.5" />
-        </button>
-
-        {/* Reader Preferences / Settings */}
-        <button
-          id="btn-settings"
-          onClick={onOpenSettingsModal}
-          title="Reader Preferences"
-          className="p-1.5 rounded-lg text-stone-600 hover:text-stone-900 hover:bg-stone-100 transition-all"
-        >
-          <Sliders className="w-3.5 h-3.5" />
-        </button>
-
-        {/* Unified App Window Controls (Minimize, Maximize/Restore, Close) */}
-        <div className="flex items-center gap-0.5 ml-1 pl-1.5 border-l border-stone-200">
-          {/* Minimize Button */}
-          <button
-            id="window-control-minimize"
-            onClick={handleMinimize}
-            title="Minimize"
-            aria-label="Minimize Window"
-            className="w-7 h-7 flex items-center justify-center text-stone-600 hover:text-stone-900 hover:bg-stone-100 active:bg-stone-200 rounded-md transition-colors cursor-pointer"
-          >
-            <Minus className="w-3.5 h-3.5" />
-          </button>
-
-          {/* Maximize / Restore Button */}
-          <button
-            id="window-control-maximize"
-            onClick={handleMaximize}
-            title={isMaximized ? 'Restore' : 'Maximize'}
-            aria-label={isMaximized ? 'Restore Window' : 'Maximize Window'}
-            className="w-7 h-7 flex items-center justify-center text-stone-600 hover:text-stone-900 hover:bg-stone-100 active:bg-stone-200 rounded-md transition-colors cursor-pointer"
-          >
-            {isMaximized ? (
-              <Copy className="w-3 h-3 stroke-[2]" />
-            ) : (
-              <Square className="w-3 h-3 stroke-[2]" />
-            )}
-          </button>
-
-          {/* Close Button */}
-          <button
-            id="window-control-close"
-            onClick={handleClose}
-            title="Close Application"
-            aria-label="Close Application"
-            className="w-7 h-7 flex items-center justify-center text-stone-600 hover:text-white hover:bg-rose-500 active:bg-rose-600 rounded-md transition-colors cursor-pointer"
-          >
-            <X className="w-3.5 h-3.5 stroke-[2.2]" />
-          </button>
-        </div>
       </div>
     </header>
   );

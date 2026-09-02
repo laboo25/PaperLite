@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Search, X, ChevronRight, FileText } from 'lucide-react';
+import { Search, X, ChevronRight } from 'lucide-react';
 import { SearchMatch } from '../types';
+import { PDFDocIcon } from './PDFDocIcon';
 
 interface SearchModalProps {
   isOpen: boolean;
@@ -109,8 +110,8 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                     }`}
                   >
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1 text-[10px] font-mono font-semibold text-blue-600 mb-0.5">
-                        <FileText className="w-3 h-3" />
+                      <div className="flex items-center gap-1.5 text-[10px] font-mono font-semibold text-blue-600 mb-0.5">
+                        <PDFDocIcon size={13} />
                         <span>PAGE {m.pageNumber}</span>
                       </div>
                       <p className="line-clamp-2 text-xs leading-relaxed text-stone-800">

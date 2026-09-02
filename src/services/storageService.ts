@@ -3,6 +3,8 @@ import { SAMPLE_DOCUMENTS } from '../data/samplePdfs';
 
 const STORAGE_KEYS = {
   LIBRARY: 'paperlite_library_index_v1',
+  OPEN_TABS: 'paperlite_open_tabs_v1',
+  ACTIVE_TAB: 'paperlite_active_tab_v1',
   SETTINGS: 'paperlite_reader_settings_v1',
   ANNOTATIONS_PREFIX: 'paperlite_annotations_',
   BOOKMARKS_PREFIX: 'paperlite_bookmarks_',
@@ -83,6 +85,49 @@ export class StorageService {
       return d;
     });
     this.saveLibrary(library);
+  }
+
+  getOpenTabs(): PDFDocumentInfo[] {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.OPEN_TABS);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to parse open tabs:', e);
+    }
+    return [];
+  }
+
+  saveOpenTabs(tabs: PDFDocumentInfo[]): void {
+    try {
+      localStorage.setItem(STORAGE_KEYS.OPEN_TABS, JSON.stringify(tabs));
+    } catch (e) {
+      console.error('Failed to save open tabs:', e);
+    }
+  }
+
+  getActiveTabId(): string | null {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.ACTIVE_TAB);
+    } catch {
+      return null;
+    }
+  }
+
+  saveActiveTabId(tabId: string | null): void {
+    try {
+      if (tabId) {
+        localStorage.setItem(STORAGE_KEYS.ACTIVE_TAB, tabId);
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.ACTIVE_TAB);
+      }
+    } catch (e) {
+      console.error('Failed to save active tab id:', e);
+    }
   }
 
   getSettings(): ReaderSettings {

@@ -5,7 +5,7 @@
 
 export function generateSamplePdf(type: 'guide' | 'typography' | 'swift' | 'minimalism'): ArrayBuffer {
   let pagesContent: string[] = [];
-  let title = 'Sample Document';
+  let title = 'PaperLite Document';
 
   if (type === 'guide') {
     title = 'PaperLite User Manual & Architecture';
@@ -291,7 +291,8 @@ function assemblePdf(title: string, pages: string[]): ArrayBuffer {
     body += `${offsetStr} 00000 n \r\n`;
   }
 
-  body += `trailer\r\n<<\r\n  /Size ${allObjs.length + 1}\r\n  /Root 1 0 R\r\n  /Info << /Title (${title}) >>\r\n>>\r\nstartxref\r\n${xrefStart}\r\n%%EOF\r\n`;
+  const hexHash = Array.from(title).map((c) => c.charCodeAt(0).toString(16).padStart(2, '0')).join('').padEnd(32, '0').slice(0, 32);
+  body += `trailer\r\n<<\r\n  /Size ${allObjs.length + 1}\r\n  /Root 1 0 R\r\n  /Info << /Title (${title}) >>\r\n  /ID [ <${hexHash}> <${hexHash}> ]\r\n>>\r\nstartxref\r\n${xrefStart}\r\n%%EOF\r\n`;
 
   const buffer = new ArrayBuffer(body.length);
   const view = new Uint8Array(buffer);

@@ -274,7 +274,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
 
     if (settings.viewMode === 'single') {
       return (
-        <div className="py-8 px-4 flex justify-center items-center min-h-full">
+        <div className="py-2.5 px-2 flex justify-center items-center min-h-full">
           <PageCanvas
             key={`single-page-${currentPage}`}
             pageNumber={currentPage}
@@ -297,7 +297,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
       const rightPage = leftPage + 1;
 
       return (
-        <div className="py-8 px-4 flex justify-center items-center gap-2 sm:gap-4 min-h-full">
+        <div className="py-2.5 px-2 flex justify-center items-center gap-2 sm:gap-3 min-h-full">
           <PageCanvas
             key={`two-page-left-${leftPage}`}
             pageNumber={leftPage}
@@ -332,7 +332,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
 
     // Default: Continuous scrolling mode
     return (
-      <div className="py-8 space-y-6 flex flex-col items-center">
+      <div className="py-3 space-y-3 flex flex-col items-center">
         {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
           <PageCanvas
             key={pageNum}

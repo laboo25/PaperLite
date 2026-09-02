@@ -9,9 +9,9 @@ import {
   ChevronRight,
   ChevronDown,
   X,
-  FileText,
   Clock
 } from 'lucide-react';
+import { PDFDocIcon } from './PDFDocIcon';
 import {
   PDFAnnotation,
   PDFBookmark,
@@ -223,8 +223,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         loading="lazy"
                       />
                     ) : (
-                      <div className="flex flex-col items-center gap-1 text-stone-300">
-                        <FileText className="w-6 h-6 stroke-[1.2]" />
+                      <div className="flex flex-col items-center gap-1.5">
+                        <PDFDocIcon size={24} className="opacity-70" />
                         <span className="text-[10px] font-mono text-stone-400">Page {pageNum}</span>
                       </div>
                     )}

@@ -1,5 +1,6 @@
 import { X, Check, Eye, Cpu, ShieldCheck, Keyboard } from 'lucide-react';
 import { ReaderSettings, ReaderTheme, ViewMode } from '../types';
+import { PDFDocIcon } from './PDFDocIcon';
 
 interface ReadingSettingsModalProps {
   isOpen: boolean;
@@ -183,7 +184,32 @@ export const ReadingSettingsModal: React.FC<ReadingSettingsModalProps> = ({
             </div>
           </div>
 
-          {/* Section 4: Keyboard Shortcuts */}
+          {/* Section 4: Windows Default PDF Reader & File Association */}
+          <div className="p-3.5 rounded-xl bg-blue-50/60 border border-blue-200/80 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs font-bold text-blue-900">
+                <PDFDocIcon size={18} />
+                <span>Windows Default PDF Reader Integration</span>
+              </div>
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-600 text-white">
+                Active (.pdf)
+              </span>
+            </div>
+
+            <div className="text-[11px] text-blue-950 space-y-1.5 leading-relaxed">
+              <p>
+                <strong>MIME Type:</strong> <code className="bg-blue-100/80 px-1 py-0.5 rounded text-[10px] font-mono">application/pdf</code> &nbsp;|&nbsp; <strong>Extension:</strong> <code className="bg-blue-100/80 px-1 py-0.5 rounded text-[10px] font-mono">.pdf</code>
+              </p>
+              <p>
+                <strong>Custom Icons:</strong> Application uses <code className="bg-blue-100/80 px-1 py-0.5 rounded text-[10px] font-mono">icon.ico</code> and PDF document files display with custom <code className="bg-blue-100/80 px-1 py-0.5 rounded text-[10px] font-mono">pdf-icon.ico</code> in Windows File Explorer.
+              </p>
+              <p className="text-blue-800">
+                <strong>To set as default on Windows:</strong> Right-click any PDF file → <em>Open with</em> → <em>Choose another app</em> → Select <em>PaperLite PDF Reader</em> → Check <em>Always use this app to open .pdf files</em>.
+              </p>
+            </div>
+          </div>
+
+          {/* Section 5: Keyboard Shortcuts */}
           <div>
             <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-stone-500 mb-2">
               <Keyboard className="w-3.5 h-3.5" />

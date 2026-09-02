@@ -108,17 +108,81 @@ export class TauriBridge {
   }
 
   /**
-   * Reads raw binary from local filesystem path via Tauri Rust fs module
+   * Checks if the app was launched with a PDF file argument (e.g. Windows double-click association)
+   */
+  async getLaunchFile(): Promise<string | null> {
+    if (this.isTauriAvailable) {
+      try {
+        const file = await this.invokeRustCommand<string | null>('get_cli_launch_file');
+        if (file) return file;
+      } catch (err) {
+        console.warn('Failed to get CLI launch file:', err);
+      }
+    }
+    
+    // Check URL parameters fallback (e.g. ?file=...)
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const fileParam = params.get('file') || params.get('pdf');
+      if (fileParam) return fileParam;
+    }
+
+    return null;
+  }
+
+  /**
+   * Sets up listeners for external file open events (Windows double-click when app is already open, or drag-and-drop)
+   */
+  async listenToFileOpenEvents(callback: (filePath: string) => void): Promise<() => void> {
+    const unlisteners: Array<() => void> = [];
+
+    if (this.isTauriAvailable) {
+      try {
+        const event = (window as any).__TAURI__?.event;
+        if (event && typeof event.listen === 'function') {
+          const unlisten = await event.listen('open-pdf-file', (e: any) => {
+            if (e && e.payload && typeof e.payload === 'string') {
+              callback(e.payload);
+            }
+          });
+          unlisteners.push(unlisten);
+        }
+      } catch (err) {
+        console.warn('Could not register Tauri file event listener:', err);
+      }
+    }
+
+    return () => {
+      unlisteners.forEach((u) => {
+        try {
+          u();
+        } catch {
+          // ignore
+        }
+      });
+    };
+  }
+
+  /**
+   * Reads raw binary from local filesystem path via Tauri Rust fs module or invoke
    */
   async readBinaryFile(filePath: string): Promise<ArrayBuffer | null> {
     if (this.isTauriAvailable) {
       try {
-        const fs = (window as any).__TAURI__.fs;
-        const uint8 = await fs.readFile(filePath);
-        return uint8.buffer;
+        // Try native Rust command first
+        const rawBytes = await this.invokeRustCommand<number[]>('read_pdf_file_binary', { path: filePath });
+        if (rawBytes && Array.isArray(rawBytes)) {
+          const uint8 = new Uint8Array(rawBytes);
+          return uint8.buffer;
+        }
+
+        const fs = (window as any).__TAURI__?.fs;
+        if (fs && typeof fs.readFile === 'function') {
+          const uint8 = await fs.readFile(filePath);
+          return uint8.buffer;
+        }
       } catch (err) {
-        console.error('Tauri fs.readFile error:', err);
-        return null;
+        console.error('Tauri readBinaryFile error:', err);
       }
     }
     return null;

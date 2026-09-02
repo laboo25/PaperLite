@@ -54,6 +54,20 @@ export interface PDFOutlineItem {
   items?: PDFOutlineItem[];
 }
 
+export interface PDFTabItem {
+  id: string;
+  doc: PDFDocumentInfo;
+  data?: ArrayBuffer;
+  currentPage: number;
+  totalPages: number;
+  fingerprint: string;
+  thumbnails?: Map<number, string>;
+  outline?: PDFOutlineItem[];
+  bookmarks?: PDFBookmark[];
+  annotations?: PDFAnnotation[];
+  isDirty?: boolean;
+}
+
 export interface SearchMatch {
   pageNumber: number;
   matchIndex: number;

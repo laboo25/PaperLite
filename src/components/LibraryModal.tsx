@@ -6,7 +6,6 @@ import {
   Trash2,
   Edit2,
   HardDrive,
-  FileText,
   Search,
   Check,
   X,
@@ -16,6 +15,7 @@ import {
 } from 'lucide-react';
 import { PDFDocumentInfo } from '../types';
 import { SAMPLE_DOCUMENTS } from '../data/samplePdfs';
+import { PDFDocIcon } from './PDFDocIcon';
 
 interface LibraryModalProps {
   isOpen: boolean;
@@ -246,9 +246,12 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
                     <div>
                       {/* Top status bar */}
                       <div className="flex items-center justify-between mb-2">
-                        <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-medium bg-stone-100 text-stone-600">
-                          {formatFileSize(doc.size)}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <PDFDocIcon size={16} />
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-medium bg-stone-100 text-stone-600">
+                            {formatFileSize(doc.size)}
+                          </span>
+                        </div>
                         <div className="flex items-center gap-1">
                           <button
                             onClick={(e) => {
@@ -340,7 +343,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
             </div>
           ) : (
             <div className="py-16 text-center text-stone-400 flex flex-col items-center gap-3">
-              <FileText className="w-10 h-10 stroke-[1.2] text-stone-300" />
+              <PDFDocIcon size={48} className="opacity-70" />
               <div>
                 <p className="text-sm font-semibold text-stone-700">No documents found</p>
                 <p className="text-xs text-stone-400 mt-0.5">

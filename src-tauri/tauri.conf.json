@@ -30,7 +30,30 @@
     "active": true,
     "targets": "all",
     "icon": [
-      "icons/icon.ico"
-    ]
+      "icons/icon.ico",
+      "icons/pdf-icon.ico"
+    ],
+    "resources": [
+      "icons/icon.ico",
+      "icons/pdf-icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["pdf"],
+        "name": "PDF Document",
+        "description": "Portable Document Format File",
+        "mimeType": "application/pdf",
+        "role": "Viewer"
+      }
+    ],
+    "windows": {
+      "wix": {
+        "language": "en-US"
+      },
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "icons/icon.ico"
+      }
+    }
   }
 }

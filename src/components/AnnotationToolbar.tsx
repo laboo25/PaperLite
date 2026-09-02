@@ -11,7 +11,10 @@ import {
   Scan,
   SlidersHorizontal,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Undo2,
+  Redo2,
+  Save
 } from 'lucide-react';
 import { AnnotationTool, HighlightColor, ViewMode } from '../types';
 
@@ -31,6 +34,9 @@ interface AnnotationToolbarProps {
   isVisible: boolean;
   activeTool: AnnotationTool;
   activeColor: string;
+  isDirty?: boolean;
+  canUndo?: boolean;
+  canRedo?: boolean;
   onPageChange: (page: number) => void;
   onZoomChange: (zoom: number) => void;
   onFitWidth: () => void;
@@ -38,6 +44,9 @@ interface AnnotationToolbarProps {
   onToggleVisibility: () => void;
   onToolChange: (tool: AnnotationTool) => void;
   onColorChange: (color: string) => void;
+  onSave?: () => void;
+  onUndo?: () => void;
+  onRedo?: () => void;
 }
 
 export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = ({
@@ -48,13 +57,19 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = ({
   isVisible,
   activeTool,
   activeColor,
+  isDirty = false,
+  canUndo = false,
+  canRedo = false,
   onPageChange,
   onZoomChange,
   onFitWidth,
   onFitPage,
   onToggleVisibility,
   onToolChange,
-  onColorChange
+  onColorChange,
+  onSave,
+  onUndo,
+  onRedo
 }) => {
   const isTwoPage = viewMode === 'two-page';
   const currentLeft = currentPage % 2 === 0 ? currentPage - 1 : currentPage;
@@ -283,6 +298,47 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = ({
             ))}
           </div>
         )}
+
+        <div className="h-4 w-px bg-stone-200 mx-0.5 shrink-0" />
+
+        {/* Undo / Redo / Save Quick Actions */}
+        <div className="flex items-center bg-stone-100/90 p-0.5 rounded-xl shrink-0 gap-0.5">
+          {onUndo && (
+            <button
+              onClick={onUndo}
+              disabled={!canUndo}
+              title="Undo Annotation (Ctrl+Z)"
+              className="p-1.5 rounded-lg text-stone-600 hover:text-stone-900 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+            >
+              <Undo2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          {onRedo && (
+            <button
+              onClick={onRedo}
+              disabled={!canRedo}
+              title="Redo Annotation (Ctrl+Y)"
+              className="p-1.5 rounded-lg text-stone-600 hover:text-stone-900 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+            >
+              <Redo2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          {onSave && (
+            <button
+              onClick={onSave}
+              title={isDirty ? 'Save Changes (Ctrl+S) - Unsaved Edits' : 'Save Document (Ctrl+S)'}
+              className={`p-1.5 rounded-lg transition-all ${
+                isDirty
+                  ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-2xs'
+                  : 'text-stone-600 hover:text-stone-900'
+              }`}
+            >
+              <Save className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
 
         <div className="h-4 w-px bg-stone-200 mx-0.5 shrink-0" />
 
