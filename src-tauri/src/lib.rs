@@ -15,13 +15,29 @@ pub struct ScannedPdfFile {
 /// Retrieves the PDF file path passed as a command-line argument when opening via Windows double-click / file association
 #[tauri::command]
 fn get_cli_launch_file() -> Option<String> {
-    for arg in std::env::args().skip(1) {
-        if !arg.starts_with("--") && !arg.starts_with("-") {
-            let lower = arg.to_lowercase();
+    for arg in std::env::args_os().skip(1) {
+        let raw = arg.to_string_lossy().to_string();
+        let clean = raw.trim().trim_matches('"').trim_matches('\'').to_string();
+        
+        // Skip CLI flags like -v, --flag
+        if clean.starts_with("--") || (clean.starts_with('-') && clean.len() <= 3 && !clean.contains('/') && !clean.contains('\\')) {
+            continue;
+        }
 
-            if lower.ends_with(".pdf") || Path::new(&arg).is_file() {
-                return Some(arg);
-            }
+        // Strip file:// prefix if present
+        let normalized = if let Some(s) = clean.strip_prefix("file:///") {
+            s.to_string()
+        } else if let Some(s) = clean.strip_prefix("file://") {
+            s.to_string()
+        } else {
+            clean.clone()
+        };
+
+        let path = Path::new(&normalized);
+        let lower = normalized.to_lowercase();
+
+        if lower.ends_with(".pdf") || path.is_file() || Path::new(&clean).is_file() {
+            return Some(normalized);
         }
     }
 
@@ -31,6 +47,21 @@ fn get_cli_launch_file() -> Option<String> {
 /// Reads raw binary bytes of a PDF file directly from disk
 #[tauri::command]
 fn read_pdf_file_binary(path: String) -> Result<Vec<u8>, String> {
+    let clean = path.trim().trim_matches('"').trim_matches('\'').to_string();
+    let normalized = if let Some(s) = clean.strip_prefix("file:///") {
+        s.to_string()
+    } else if let Some(s) = clean.strip_prefix("file://") {
+        s.to_string()
+    } else {
+        clean.clone()
+    };
+
+    if let Ok(bytes) = fs::read(&normalized) {
+        return Ok(bytes);
+    }
+    if let Ok(bytes) = fs::read(&clean) {
+        return Ok(bytes);
+    }
     fs::read(&path)
         .map_err(|e| format!("Failed to read PDF file '{}': {}", path, e))
 }

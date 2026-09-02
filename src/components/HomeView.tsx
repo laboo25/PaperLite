@@ -54,9 +54,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
         {/* Workspace Action Header */}
         <div className="flex items-center justify-between gap-3 pb-3 border-b border-stone-200/80">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center shadow-2xs">
-              <PDFDocIcon size={20} />
-            </div>
+            <PDFDocIcon size={24} className="shrink-0" />
             <div>
               <h1 className="text-base font-bold text-stone-900 leading-tight">
                 Document Workspace
@@ -165,9 +163,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 className="group relative p-3.5 rounded-2xl bg-white border border-stone-200/80 hover:border-blue-400 hover:shadow-md transition-all cursor-pointer flex flex-col justify-between"
               >
                 <div className="flex items-start justify-between gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-stone-100 group-hover:bg-blue-50 flex items-center justify-center transition-colors">
-                    <PDFDocIcon size={20} />
-                  </div>
+                  <PDFDocIcon size={24} className="shrink-0" />
                   <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-stone-100 text-stone-600 font-medium">
                     {sample.info.totalPages} pages
                   </span>
@@ -214,9 +210,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                   className="group flex items-center justify-between p-3.5 hover:bg-stone-50/80 transition-colors cursor-pointer"
                 >
                   <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <div className="w-8 h-8 rounded-lg bg-stone-100 group-hover:bg-blue-50 flex items-center justify-center shrink-0 transition-colors">
-                      <PDFDocIcon size={20} />
-                    </div>
+                    <PDFDocIcon size={22} className="shrink-0" />
 
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">

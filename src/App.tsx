@@ -101,14 +101,21 @@ export default function App() {
     const docs = storageService.getLibrary();
     setLibraryDocs(docs);
 
-    // 1. Check if application was launched with a PDF file argument (e.g. Windows double-click association)
-    tauriBridge.getLaunchFile().then((launchFile) => {
-      if (launchFile) {
-        openPdfFromPath(launchFile);
-        return;
+    const initStartupDocument = async () => {
+      // 1. Check if application was launched with a PDF file argument (e.g. Windows double-click association)
+      try {
+        const launchFile = await tauriBridge.getLaunchFile();
+        if (launchFile) {
+          const opened = await openPdfFromPath(launchFile);
+          if (opened) {
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Startup launch file check failed:', err);
       }
 
-      // If no launch file argument, restore previous session or open first doc
+      // 2. If no launch file argument or file could not be read, restore previous session
       const savedOpenDocs = storageService.getOpenTabs();
       const savedActiveId = storageService.getActiveTabId();
 
@@ -142,14 +149,16 @@ export default function App() {
       }
 
       if (docs.length > 0) {
-        // Auto-open first document
+        // Auto-open first document from library
         loadDocumentFromInfo(docs[0]);
       } else {
         loadSample(SAMPLE_DOCUMENTS[0].info.id);
       }
-    });
+    };
 
-    // 2. Listen for runtime file open events (e.g. user double-clicks another PDF while app is already running)
+    initStartupDocument();
+
+    // 3. Listen for runtime file open events (e.g. user double-clicks another PDF while app is already running)
     let unlistenFileEvents: (() => void) | null = null;
     tauriBridge.listenToFileOpenEvents((filePath) => {
       if (filePath) {
@@ -185,6 +194,40 @@ export default function App() {
     });
   };
 
+  // Hidden File Input Ref for rock-solid cross-platform file picking
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const buffer = await file.arrayBuffer();
+      if (buffer && buffer.byteLength > 0) {
+        const uniqueId = 'doc-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+        const docInfo: PDFDocumentInfo = {
+          id: uniqueId,
+          name: file.name,
+          path: (file as any).path || file.name,
+          size: file.size,
+          totalPages: 1,
+          lastOpened: Date.now(),
+          lastPageRead: 1,
+          fingerprint: 'fp-' + file.name + '-' + file.size + '-' + uniqueId,
+          category: 'Imported',
+          tags: ['Local']
+        };
+        await loadPDFBuffer(buffer, docInfo);
+        addToast(`Opened ${file.name}`, 'success');
+      }
+    } catch (err: any) {
+      console.error('Error reading selected file:', err);
+      addToast('Failed to open PDF: ' + (err?.message || 'File read error'), 'error');
+    } finally {
+      if (e.target) e.target.value = '';
+    }
+  };
+
   // Load PDF Binary Buffer into PDF Engine & manage tab state
   const loadPDFBuffer = async (data: ArrayBuffer, docInfo: PDFDocumentInfo) => {
     setIsLoadingDoc(true);
@@ -193,7 +236,9 @@ export default function App() {
     setOutline([]);
 
     try {
-      const result = await pdfEngine.loadDocument(data);
+      // Ensure we keep an un-detached clone for tab state
+      const dataClone = data.slice(0);
+      const result = await pdfEngine.loadDocument(dataClone);
       const numPages = result.numPages;
       setTotalPages(numPages);
 
@@ -229,7 +274,7 @@ export default function App() {
         const newTabItem: PDFTabItem = {
           id: tabId,
           doc: updatedInfo,
-          data,
+          data: data.slice(0),
           currentPage: validPage,
           totalPages: numPages,
           fingerprint,
@@ -257,6 +302,7 @@ export default function App() {
     } catch (err: any) {
       console.error('Failed to parse PDF document:', err);
       setErrorMessage(err?.message || 'Could not load PDF document. Please verify the file format.');
+      addToast('Could not load PDF document', 'error');
     } finally {
       setIsLoadingDoc(false);
     }
@@ -297,32 +343,43 @@ export default function App() {
       return;
     }
 
-    // Try reading via Tauri Rust fs or fallback sample
+    // Try reading via Tauri Rust fs or fallback
     if (docInfo.path) {
       const bin = await tauriBridge.readBinaryFile(docInfo.path);
-      if (bin) {
+      if (bin && bin.byteLength > 0) {
         await loadPDFBuffer(bin, docInfo);
         return;
       }
     }
 
-    // Fallback: generate default guide sample
-    const fallbackBuffer = SAMPLE_DOCUMENTS[0].getData();
-    await loadPDFBuffer(fallbackBuffer, docInfo);
+    // If file could not be loaded, inform user
+    addToast(`Could not reload '${docInfo.name}'. Please re-open the file.`, 'error');
   };
 
   // Open PDF directly from local disk path (e.g. Windows file association double-click, CLI argument, or event)
-  const openPdfFromPath = async (filePath: string) => {
-    if (!filePath) return false;
+  const openPdfFromPath = async (filePath: string): Promise<boolean> => {
+    if (!filePath || typeof filePath !== 'string') return false;
+    const cleanPath = filePath.trim().replace(/^"|"$/g, '');
+    if (!cleanPath) return false;
+
     try {
-      const fileName = filePath.split(/[\\/]/).pop() || 'Document.pdf';
-      const binary = await tauriBridge.readBinaryFile(filePath);
+      // Check if this path is already open in an existing tab
+      const existingTab = tabs.find(
+        (t) => t.doc.path && t.doc.path.toLowerCase() === cleanPath.toLowerCase()
+      );
+      if (existingTab) {
+        handleSelectTab(existingTab.id);
+        return true;
+      }
+
+      const fileName = cleanPath.split(/[\\/]/).pop() || 'Document.pdf';
+      const binary = await tauriBridge.readBinaryFile(cleanPath);
       if (binary && binary.byteLength > 0) {
         const uniqueId = 'doc-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
         const docInfo: PDFDocumentInfo = {
           id: uniqueId,
           name: fileName,
-          path: filePath,
+          path: cleanPath,
           size: binary.byteLength,
           totalPages: 1,
           lastOpened: Date.now(),
@@ -332,10 +389,13 @@ export default function App() {
           tags: ['Default Reader', 'Local']
         };
         await loadPDFBuffer(binary, docInfo);
+        addToast(`Opened ${fileName}`, 'success');
         return true;
+      } else {
+        console.warn('Could not read binary from path:', cleanPath);
       }
     } catch (err) {
-      console.error('Failed to open PDF from path:', filePath, err);
+      console.error('Failed to open PDF from path:', cleanPath, err);
     }
     return false;
   };
@@ -349,22 +409,54 @@ export default function App() {
 
   // Open Native / File Picker
   const handleOpenFile = async () => {
-    const file = await tauriBridge.pickPdfFile();
-    if (file) {
-      const uniqueId = 'doc-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
-      const docInfo: PDFDocumentInfo = {
-        id: uniqueId,
-        name: file.name,
-        path: file.path,
-        size: file.size,
-        totalPages: 1,
-        lastOpened: Date.now(),
-        lastPageRead: 1,
-        fingerprint: 'fp-' + file.name + '-' + file.size + '-' + uniqueId,
-        category: 'Imported',
-        tags: ['Local']
-      };
-      await loadPDFBuffer(file.data, docInfo);
+    if (tauriBridge.isNativeDesktop()) {
+      try {
+        const file = await tauriBridge.pickPdfFile();
+        if (file && file.data && file.data.byteLength > 0) {
+          const uniqueId = 'doc-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+          const docInfo: PDFDocumentInfo = {
+            id: uniqueId,
+            name: file.name,
+            path: file.path,
+            size: file.size,
+            totalPages: 1,
+            lastOpened: Date.now(),
+            lastPageRead: 1,
+            fingerprint: 'fp-' + file.name + '-' + file.size + '-' + uniqueId,
+            category: 'Imported',
+            tags: ['Local']
+          };
+          await loadPDFBuffer(file.data, docInfo);
+          addToast(`Opened ${file.name}`, 'success');
+          return;
+        }
+      } catch (err) {
+        console.warn('Native picker notice:', err);
+      }
+    }
+
+    // Trigger mounted file input
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    } else {
+      const fallback = await tauriBridge.pickPdfFile();
+      if (fallback && fallback.data && fallback.data.byteLength > 0) {
+        const uniqueId = 'doc-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+        const docInfo: PDFDocumentInfo = {
+          id: uniqueId,
+          name: fallback.name,
+          path: fallback.path,
+          size: fallback.size,
+          totalPages: 1,
+          lastOpened: Date.now(),
+          lastPageRead: 1,
+          fingerprint: 'fp-' + fallback.name + '-' + fallback.size + '-' + uniqueId,
+          category: 'Imported',
+          tags: ['Local']
+        };
+        await loadPDFBuffer(fallback.data, docInfo);
+        addToast(`Opened ${fallback.name}`, 'success');
+      }
     }
   };
 
@@ -920,20 +1012,27 @@ export default function App() {
 
     const file = e.dataTransfer.files?.[0];
     if (file && (file.type === 'application/pdf' || file.name.endsWith('.pdf'))) {
-      const buffer = await file.arrayBuffer();
-      const docInfo: PDFDocumentInfo = {
-        id: 'doc-dropped-' + Date.now(),
-        name: file.name,
-        path: `/local/dropped/${file.name}`,
-        size: file.size,
-        totalPages: 1,
-        lastOpened: Date.now(),
-        lastPageRead: 1,
-        fingerprint: 'fp-' + file.name + '-' + file.size,
-        category: 'Imported',
-        tags: ['Dropped']
-      };
-      await loadPDFBuffer(buffer, docInfo);
+      try {
+        const buffer = await file.arrayBuffer();
+        const uniqueId = 'doc-dropped-' + Date.now();
+        const docInfo: PDFDocumentInfo = {
+          id: uniqueId,
+          name: file.name,
+          path: (file as any).path || `/local/dropped/${file.name}`,
+          size: file.size,
+          totalPages: 1,
+          lastOpened: Date.now(),
+          lastPageRead: 1,
+          fingerprint: 'fp-' + file.name + '-' + file.size + '-' + uniqueId,
+          category: 'Imported',
+          tags: ['Dropped']
+        };
+        await loadPDFBuffer(buffer, docInfo);
+        addToast(`Opened ${file.name}`, 'success');
+      } catch (err: any) {
+        console.error('Error opening dropped file:', err);
+        addToast('Failed to open dropped PDF', 'error');
+      }
     }
   };
 
@@ -952,6 +1051,15 @@ export default function App() {
       onDrop={handleDrop}
       className={`h-screen w-screen flex flex-col overflow-hidden theme-${settings.theme} select-none`}
     >
+      {/* Hidden File Picker Input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/pdf,.pdf"
+        className="hidden"
+        onChange={handleFileInputChange}
+      />
+
       {/* 1. Top Window Controller Bar: Home Page Button + Browser / WPS Office Multi-Document Tabs + Window Controls */}
       <TitleBar
         tabs={tabs}

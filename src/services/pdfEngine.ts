@@ -1,11 +1,11 @@
 import * as pdfjsLib from 'pdfjs-dist';
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { PDFOutlineItem, SearchMatch } from '../types';
 
-// Setup PDF.js worker
+// Setup PDF.js worker using same-origin bundled local asset
 if (typeof window !== 'undefined') {
   try {
-    // Set standard reliable worker source from CDN or local bundle
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version || '4.10.38'}/pdf.worker.min.mjs`;
+    pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
   } catch (e) {
     console.warn('PDF Worker setup note:', e);
   }
@@ -59,9 +59,29 @@ class PDFEngineInstance {
     this.pageTextCache.clear();
     this.pageItemsCache.clear();
 
-    const loadingTask = pdfjsLib.getDocument(
-      typeof data === 'string' ? { url: data } : { data }
-    );
+    let docParams: any;
+    if (typeof data === 'string') {
+      docParams = {
+        url: data,
+        cMapPacked: true
+      };
+    } else {
+      let uint8: Uint8Array;
+      if (data instanceof Uint8Array) {
+        // Create an isolated copy to prevent buffer detachment
+        uint8 = new Uint8Array(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
+      } else if (data instanceof ArrayBuffer) {
+        uint8 = new Uint8Array(data.slice(0));
+      } else {
+        uint8 = new Uint8Array(data);
+      }
+      docParams = {
+        data: uint8,
+        cMapPacked: true
+      };
+    }
+
+    const loadingTask = pdfjsLib.getDocument(docParams);
 
     this.pdfDocument = await loadingTask.promise;
     const numPages = this.pdfDocument.numPages;

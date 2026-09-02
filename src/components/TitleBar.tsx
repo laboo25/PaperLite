@@ -183,9 +183,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
                 }`}
               >
                 {/* Document Icon (Multi-resolution bundle icon) */}
-                <div className={`shrink-0 rounded-[3px] p-0.5 ${isActive ? 'bg-white/20' : ''}`}>
-                  <PDFDocIcon size={14} className="shrink-0" />
-                </div>
+                <PDFDocIcon size={15} className="shrink-0" />
 
                 {/* Tab Title */}
                 <span
