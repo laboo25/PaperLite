@@ -360,6 +360,76 @@ export class TauriBridge {
       return false;
     }
   }
+
+  /**
+   * Renames a PDF file on the local filesystem (Tauri native)
+   */
+  async renamePdfFile(oldPath: string, newName: string): Promise<{ success: boolean; newPath?: string; error?: string }> {
+    if (!oldPath) {
+      return { success: true };
+    }
+
+    try {
+      if (this.isNativeDesktop()) {
+        const newPath = await this.invokeRustCommand<string>('rename_pdf_file', {
+          oldPath,
+          newName
+        });
+        return { success: true, newPath };
+      }
+      return { success: true };
+    } catch (err: any) {
+      console.warn('Native rename error, proceeding with app metadata update:', err);
+      return { success: false, error: err?.message || String(err) };
+    }
+  }
+
+  /**
+   * Permanently deletes a PDF file from storage / disk (Tauri native)
+   */
+  async deletePdfFromStorage(filePath: string): Promise<{ success: boolean; error?: string }> {
+    if (!filePath) {
+      return { success: true };
+    }
+
+    try {
+      if (this.isNativeDesktop()) {
+        await this.invokeRustCommand<boolean>('delete_pdf_from_storage', {
+          path: filePath
+        });
+        return { success: true };
+      }
+      return { success: true };
+    } catch (err: any) {
+      console.warn('Native delete error:', err);
+      return { success: false, error: err?.message || String(err) };
+    }
+  }
+
+  /**
+   * Registers / refreshes Windows File Explorer PDF file association to display `pdf-icon.ico`
+   */
+  async registerPdfFileAssociationIcon(): Promise<{ success: boolean; message: string }> {
+    try {
+      if (this.isNativeDesktop()) {
+        const msg = await this.invokeRustCommand<string>('register_pdf_file_association_icon');
+        return {
+          success: true,
+          message: msg || 'PDF file icon association registered with pdf-icon.ico.'
+        };
+      }
+      return {
+        success: true,
+        message: 'Icon association configured (ready for desktop package).'
+      };
+    } catch (err: any) {
+      console.warn('registerPdfFileAssociationIcon error:', err);
+      return {
+        success: false,
+        message: err?.message || String(err)
+      };
+    }
+  }
 }
 
 export const tauriBridge = new TauriBridge();

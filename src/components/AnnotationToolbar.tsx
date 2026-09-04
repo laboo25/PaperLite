@@ -133,7 +133,12 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = ({
 
   if (!isVisible) {
     return (
-      <div className="fixed bottom-3.5 left-1/2 -translate-x-1/2 z-30 select-none pointer-events-auto">
+      <div
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        className="fixed bottom-3.5 left-1/2 -translate-x-1/2 z-30 select-none pointer-events-auto"
+      >
         <button
           id="btn-restore-toolbar"
           onClick={onToggleVisibility}
@@ -153,7 +158,12 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = ({
   }
 
   return (
-    <div className="fixed bottom-3.5 left-1/2 -translate-x-1/2 z-30 select-none max-w-[calc(100vw-24px)] pointer-events-auto">
+    <div
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      className="fixed bottom-3.5 left-1/2 -translate-x-1/2 z-30 select-none max-w-[calc(100vw-24px)] pointer-events-auto"
+    >
       <div className="flex items-center gap-1.5 sm:gap-2 p-1.5 rounded-2xl bg-white/95 backdrop-blur-2xl border border-black/[0.08] shadow-2xl overflow-x-auto no-scrollbar">
         {/* Navigation */}
         <div className="flex items-center bg-stone-100/90 p-0.5 rounded-xl shrink-0">

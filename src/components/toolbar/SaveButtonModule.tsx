@@ -52,6 +52,10 @@ export const SaveButtonModule: React.FC<SaveButtonModuleProps> = ({
     };
   }, [isOpen]);
 
+  const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform || navigator.userAgent);
+  const saveShortcut = isMac ? '⌘S' : 'Ctrl+S';
+  const saveAsShortcut = isMac ? '⇧⌘S' : 'Ctrl+Shift+S';
+
   const handleMainSave = (e: React.MouseEvent) => {
     e.stopPropagation();
     onSave();
@@ -59,7 +63,7 @@ export const SaveButtonModule: React.FC<SaveButtonModuleProps> = ({
 
   return (
     <div ref={containerRef} className="relative inline-flex items-center">
-      {/* Primary Save Button */}
+      {/* Primary Save Button - Default Action */}
       <button
         type="button"
         id="btn-file-save"
@@ -67,8 +71,8 @@ export const SaveButtonModule: React.FC<SaveButtonModuleProps> = ({
         disabled={isSaving}
         title={
           isDirty
-            ? 'Save changes to document (Ctrl+S / Cmd+S) - Unsaved Edits'
-            : 'All edits saved (Ctrl+S / Cmd+S)'
+            ? `Save changes to document (${saveShortcut}) - Unsaved Edits`
+            : `All edits saved (${saveShortcut})`
         }
         aria-label="Save document changes"
         className={`h-7 px-2.5 rounded-l-lg flex items-center gap-1.5 text-xs font-semibold transition-all cursor-pointer border ${
@@ -118,59 +122,101 @@ export const SaveButtonModule: React.FC<SaveButtonModuleProps> = ({
 
       {/* Popover Menu */}
       {isOpen && (
-        <div className="absolute top-full right-0 mt-1.5 w-60 p-2 bg-white/98 backdrop-blur-xl rounded-xl shadow-xl border border-stone-200/90 z-50 animate-in fade-in zoom-in-95 duration-150 space-y-1">
-          <div className="px-2 py-1 pb-1.5 border-b border-stone-100 flex items-center justify-between">
-            <span className="text-[11px] font-bold text-stone-700">File Storage & Sync</span>
+        <div
+          data-no-drag="true"
+          data-popover="true"
+          style={{ WebkitAppRegion: 'no-drag' } as any}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="absolute top-full right-0 mt-1.5 w-64 p-2 bg-white/98 backdrop-blur-xl rounded-xl shadow-2xl border border-stone-200/90 z-[100] animate-in fade-in zoom-in-95 duration-150 space-y-1 select-none"
+        >
+          {/* Header Status */}
+          <div className="px-2.5 py-1.5 pb-2 border-b border-stone-100 flex items-center justify-between">
+            <span className="text-[11px] font-bold text-stone-700">File Storage & Save</span>
             {isDirty ? (
-              <span className="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">
+              <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200/60 px-1.5 py-0.5 rounded-md flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
                 Unsaved Edits
               </span>
             ) : (
-              <span className="text-[10px] font-medium text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">
+              <span className="text-[10px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200/60 px-1.5 py-0.5 rounded-md flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                 Up to Date
               </span>
             )}
           </div>
 
+          {/* Option 1: Save (Default Option) */}
           <button
             type="button"
+            id="menu-item-save-default"
             onClick={() => {
               onSave();
               setIsOpen(false);
             }}
-            className="w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium text-stone-700 hover:bg-stone-100 hover:text-stone-900 transition-colors cursor-pointer"
+            className="w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium text-stone-800 hover:bg-blue-50 hover:text-blue-700 transition-colors cursor-pointer group"
           >
-            <div className="flex items-center gap-2">
-              <Save className="w-3.5 h-3.5 text-blue-600" />
-              <span>Save Changes</span>
+            <div className="flex items-center gap-2 min-w-0">
+              <Save className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+              <div className="text-left flex items-center gap-1.5">
+                <span className="font-semibold text-stone-900 group-hover:text-blue-700">Save</span>
+                <span className="text-[9px] font-bold uppercase tracking-wider px-1 py-0.2 rounded bg-blue-100/70 text-blue-700 border border-blue-200/60">
+                  Default
+                </span>
+              </div>
             </div>
-            <span className="text-[10px] text-stone-400 font-mono">Ctrl+S</span>
+            <span className="text-[10px] text-stone-400 font-mono font-medium group-hover:text-blue-600">
+              {saveShortcut}
+            </span>
           </button>
 
-          {onSaveAs && (
-            <button
-              type="button"
-              onClick={() => {
-                onSaveAs();
-                setIsOpen(false);
-              }}
-              className="w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium text-stone-700 hover:bg-stone-100 hover:text-stone-900 transition-colors cursor-pointer"
-            >
-              <div className="flex items-center gap-2">
-                <FileDown className="w-3.5 h-3.5 text-indigo-600" />
-                <span>Save Annotations As...</span>
-              </div>
-              <span className="text-[10px] text-stone-400 font-mono">JSON / PDF</span>
-            </button>
-          )}
+          {/* Option 2: Save As... with keyboard shortcut */}
+          <button
+            type="button"
+            id="menu-item-save-as"
+            onClick={() => {
+              if (onSaveAs) onSaveAs();
+              setIsOpen(false);
+            }}
+            className="w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium text-stone-800 hover:bg-stone-100 hover:text-stone-900 transition-colors cursor-pointer group"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <FileDown className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+              <span className="font-medium text-stone-800 group-hover:text-stone-900">Save As...</span>
+            </div>
+            <span className="text-[10px] text-stone-400 font-mono font-medium group-hover:text-stone-600">
+              {saveAsShortcut}
+            </span>
+          </button>
 
+          {/* Option 3: Export Annotations Package */}
+          <button
+            type="button"
+            id="menu-item-export-annotations"
+            onClick={() => {
+              if (onSaveAs) onSaveAs();
+              setIsOpen(false);
+            }}
+            className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-stone-600 hover:bg-stone-100 hover:text-stone-800 transition-colors cursor-pointer"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+              <span className="text-[11px] text-stone-600">Export Annotations</span>
+            </div>
+            <span className="text-[9px] text-stone-400 font-mono uppercase">JSON</span>
+          </button>
+
+          {/* Footer Last Saved */}
           {lastSavedTime && (
-            <div className="px-2.5 pt-1 text-[10px] text-stone-400 font-mono">
-              Last saved:{' '}
-              {new Date(lastSavedTime).toLocaleTimeString([], {
-                hour: '2-digit',
-                minute: '2-digit'
-              })}
+            <div className="px-2.5 pt-1.5 pb-0.5 border-t border-stone-100 text-[10px] text-stone-400 font-mono flex items-center justify-between">
+              <span>Last saved:</span>
+              <span className="text-stone-600">
+                {new Date(lastSavedTime).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit'
+                })}
+              </span>
             </div>
           )}
         </div>

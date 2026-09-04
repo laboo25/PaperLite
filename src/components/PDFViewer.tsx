@@ -5,6 +5,8 @@ import { HIGHLIGHT_COLORS } from './AnnotationToolbar';
 import {
   Highlighter,
   Underline as UnderlineIcon,
+  Strikethrough,
+  Edit3,
   MessageSquare,
   Copy,
   Search,
@@ -13,6 +15,7 @@ import {
 } from 'lucide-react';
 
 interface PDFViewerProps {
+  documentId?: string;
   totalPages: number;
   currentPage: number;
   settings: ReaderSettings;
@@ -26,6 +29,7 @@ interface PDFViewerProps {
 }
 
 export const PDFViewer: React.FC<PDFViewerProps> = ({
+  documentId,
   totalPages,
   currentPage,
   settings,
@@ -44,11 +48,14 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
     y: number;
     pageNumber: number;
     rects: { x: number; y: number; width: number; height: number }[];
+    placement?: 'above' | 'below';
   } | null>(null);
 
   const [copiedFeedback, setCopiedFeedback] = useState(false);
   const [showNoteInput, setShowNoteInput] = useState(false);
   const [noteComment, setNoteComment] = useState('');
+  const [showEditInput, setShowEditInput] = useState(false);
+  const [editText, setEditText] = useState('');
 
   // Track visible pages to sync active currentPage in continuous mode
   const visiblePagesMap = useRef<Map<number, boolean>>(new Map());
@@ -89,10 +96,10 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
   }, [currentPage, settings.viewMode]);
 
   // Handle native text selection and show custom context menu
-  const handleMouseUp = () => {
+  const checkAndHandleSelection = useCallback(() => {
     const selection = window.getSelection();
-    if (!selection || selection.isCollapsed) {
-      if (!showNoteInput) {
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+      if (!showNoteInput && !showEditInput) {
         setSelectedTextPopup(null);
       }
       return;
@@ -100,31 +107,56 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
 
     const text = selection.toString().trim();
     if (!text || text.length === 0) {
-      if (!showNoteInput) {
+      if (!showNoteInput && !showEditInput) {
         setSelectedTextPopup(null);
       }
       return;
     }
 
     const range = selection.getRangeAt(0);
-    const clientRects = range.getClientRects();
-    if (clientRects.length === 0) return;
+    let rawRects = Array.from(range.getClientRects()).filter(
+      (r) => r.width > 0 && r.height > 0
+    );
 
-    // Determine page container from anchor or range commonAncestor
-    let targetEl: HTMLElement | null =
-      (selection.anchorNode as HTMLElement) || (range.commonAncestorContainer as HTMLElement);
-    if (targetEl && targetEl.nodeType === Node.TEXT_NODE) {
-      targetEl = targetEl.parentElement;
+    // Fallback if individual clientRects are empty across spans
+    if (rawRects.length === 0) {
+      const bound = range.getBoundingClientRect();
+      if (bound && bound.width > 0 && bound.height > 0) {
+        rawRects = [bound];
+      }
     }
-    while (targetEl && !targetEl.getAttribute?.('data-page-number')) {
-      targetEl = targetEl.parentElement;
+
+    if (rawRects.length === 0) return;
+
+    // Determine target page container from candidate selection nodes
+    const candidateNodes: (Node | null)[] = [
+      selection.anchorNode,
+      selection.focusNode,
+      range.startContainer,
+      range.endContainer,
+      range.commonAncestorContainer
+    ];
+
+    let pageContainer: HTMLElement | null = null;
+    let pageNum = currentPage;
+
+    for (const node of candidateNodes) {
+      if (!node) continue;
+      const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement);
+      const container = el?.closest?.('[data-page-number]') as HTMLElement | null;
+      if (container) {
+        pageContainer = container;
+        const parsed = parseInt(container.getAttribute('data-page-number') || '', 10);
+        if (!isNaN(parsed) && parsed > 0) {
+          pageNum = parsed;
+          break;
+        }
+      }
     }
 
-    const pageNum = targetEl
-      ? parseInt(targetEl.getAttribute('data-page-number') || '1', 10)
-      : currentPage;
-
-    const pageContainer = targetEl || document.getElementById(`page-container-${pageNum}`);
+    if (!pageContainer) {
+      pageContainer = document.getElementById(`page-container-${pageNum}`);
+    }
     const pageRect = pageContainer ? pageContainer.getBoundingClientRect() : null;
 
     // Convert client rects to unscaled page coordinates
@@ -132,12 +164,19 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
     const unscaledRects: { x: number; y: number; width: number; height: number }[] = [];
 
     if (pageRect) {
-      for (let i = 0; i < clientRects.length; i++) {
-        const cr = clientRects[i];
-        if (cr.width <= 0 || cr.height <= 0) continue;
+      for (const cr of rawRects) {
         unscaledRects.push({
           x: (cr.left - pageRect.left) / scale,
           y: (cr.top - pageRect.top) / scale,
+          width: cr.width / scale,
+          height: cr.height / scale
+        });
+      }
+    } else {
+      for (const cr of rawRects) {
+        unscaledRects.push({
+          x: cr.left / scale,
+          y: cr.top / scale,
           width: cr.width / scale,
           height: cr.height / scale
         });
@@ -160,22 +199,46 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
       return;
     }
 
-    // Anchor popup centered above the selection
-    const firstRect = clientRects[0];
-    const lastRect = clientRects[clientRects.length - 1];
-    const popupX = Math.max(120, Math.min(window.innerWidth - 140, (firstRect.left + lastRect.right) / 2));
-    const popupY = Math.max(70, firstRect.top - 12);
+    // Anchor popup safely within viewport boundaries
+    const firstRect = rawRects[0];
+    const lastRect = rawRects[rawRects.length - 1];
+    const popupX = Math.max(160, Math.min(window.innerWidth - 160, (firstRect.left + lastRect.right) / 2));
+
+    // If text is near top of viewport, position context popup below selection
+    const isNearTop = firstRect.top < 95;
+    const popupY = isNearTop
+      ? Math.min(window.innerHeight - 60, lastRect.bottom + 8)
+      : Math.max(50, firstRect.top - 8);
 
     setSelectedTextPopup({
       text,
       x: popupX,
       y: popupY,
       pageNumber: pageNum,
-      rects: unscaledRects
+      rects: unscaledRects,
+      placement: isNearTop ? 'below' : 'above'
     });
     setShowNoteInput(false);
+    setShowEditInput(false);
     setNoteComment('');
-  };
+    setEditText('');
+  }, [activeTool, activeColor, currentPage, onAddAnnotation, settings.zoom, showEditInput, showNoteInput]);
+
+  // Global document mouseup ensures selection is captured anywhere in the window
+  useEffect(() => {
+    const onDocMouseUp = (e: MouseEvent) => {
+      const popupEl = document.getElementById('selected-text-context-popup');
+      if (popupEl && popupEl.contains(e.target as Node)) {
+        return;
+      }
+      setTimeout(checkAndHandleSelection, 20);
+    };
+
+    document.addEventListener('mouseup', onDocMouseUp);
+    return () => {
+      document.removeEventListener('mouseup', onDocMouseUp);
+    };
+  }, [checkAndHandleSelection]);
 
   const applyTextHighlight = (color: string) => {
     if (!selectedTextPopup) return;
@@ -211,6 +274,45 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
     window.getSelection()?.removeAllRanges();
     setSelectedTextPopup(null);
     setShowNoteInput(false);
+  };
+
+  const applyTextStrike = (color: string) => {
+    if (!selectedTextPopup) return;
+
+    onAddAnnotation({
+      id: 'st-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+      pageNumber: selectedTextPopup.pageNumber,
+      type: 'strike',
+      color: color || '#EF4444',
+      text: selectedTextPopup.text,
+      rects: selectedTextPopup.rects,
+      createdAt: Date.now()
+    });
+
+    window.getSelection()?.removeAllRanges();
+    setSelectedTextPopup(null);
+    setShowNoteInput(false);
+    setShowEditInput(false);
+  };
+
+  const handleSaveTextEdit = () => {
+    if (!selectedTextPopup || !editText.trim()) return;
+
+    onAddAnnotation({
+      id: 'edit-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+      pageNumber: selectedTextPopup.pageNumber,
+      type: 'strike',
+      color: '#EF4444',
+      comment: `Edit: "${editText.trim()}"`,
+      text: selectedTextPopup.text,
+      rects: selectedTextPopup.rects,
+      createdAt: Date.now()
+    });
+
+    window.getSelection()?.removeAllRanges();
+    setSelectedTextPopup(null);
+    setShowEditInput(false);
+    setEditText('');
   };
 
   const handleCopyText = async () => {
@@ -276,7 +378,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
       return (
         <div className="py-2.5 px-2 flex justify-center items-center min-h-full">
           <PageCanvas
-            key={`single-page-${currentPage}`}
+            key={`${documentId || 'doc'}-single-page-${currentPage}`}
             pageNumber={currentPage}
             scale={settings.zoom}
             rotation={settings.rotation}
@@ -299,7 +401,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
       return (
         <div className="py-2.5 px-2 flex justify-center items-center gap-2 sm:gap-3 min-h-full">
           <PageCanvas
-            key={`two-page-left-${leftPage}`}
+            key={`${documentId || 'doc'}-two-page-left-${leftPage}`}
             pageNumber={leftPage}
             scale={settings.zoom}
             rotation={settings.rotation}
@@ -313,7 +415,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
           />
           {rightPage <= totalPages && (
             <PageCanvas
-              key={`two-page-right-${rightPage}`}
+              key={`${documentId || 'doc'}-two-page-right-${rightPage}`}
               pageNumber={rightPage}
               scale={settings.zoom}
               rotation={settings.rotation}
@@ -335,7 +437,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
       <div className="py-3 space-y-3 flex flex-col items-center">
         {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
           <PageCanvas
-            key={pageNum}
+            key={`${documentId || 'doc'}-page-${pageNum}`}
             pageNumber={pageNum}
             scale={settings.zoom}
             rotation={settings.rotation}
@@ -357,7 +459,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
     <main
       ref={containerRef}
       id="pdf-viewport"
-      onMouseUp={handleMouseUp}
+      onMouseUp={checkAndHandleSelection}
       className={`flex-1 h-full overflow-y-auto overflow-x-auto relative transition-colors ${
         settings.theme === 'sepia'
           ? 'bg-[#F2E8D5]'
@@ -373,11 +475,16 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
       {/* Sleek Floating Custom Context Menu for Selected Text */}
       {selectedTextPopup && (
         <div
-          className="fixed z-50 p-1.5 rounded-2xl bg-white/95 backdrop-blur-2xl shadow-2xl border border-black/10 flex flex-col gap-2 -translate-x-1/2 -translate-y-full mb-2 animate-in fade-in zoom-in-95 duration-150 select-none max-w-sm"
+          id="selected-text-context-popup"
+          className={`fixed z-50 p-1.5 rounded-2xl bg-white/95 backdrop-blur-2xl shadow-2xl border border-black/10 flex flex-col gap-2 -translate-x-1/2 ${
+            selectedTextPopup.placement === 'below' ? 'mt-2' : '-translate-y-full mb-2'
+          } animate-in fade-in zoom-in-95 duration-150 select-none max-w-sm`}
           style={{ left: `${selectedTextPopup.x}px`, top: `${selectedTextPopup.y}px` }}
           onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
         >
-          {!showNoteInput ? (
+          {!showNoteInput && !showEditInput ? (
             <div className="flex items-center gap-1.5">
               {/* Highlight Palette Buttons */}
               <div className="flex items-center gap-1 px-1 border-r border-stone-200">
@@ -400,6 +507,27 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
                 title="Underline Text"
               >
                 <UnderlineIcon className="w-3.5 h-3.5 text-stone-700" />
+              </button>
+
+              {/* Strike-Through Action */}
+              <button
+                onClick={() => applyTextStrike(activeColor)}
+                className="p-1.5 text-stone-600 hover:text-stone-900 hover:bg-stone-100 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors"
+                title="Strikethrough Text"
+              >
+                <Strikethrough className="w-3.5 h-3.5 text-stone-700" />
+              </button>
+
+              {/* Edit / Replace Text Action */}
+              <button
+                onClick={() => {
+                  setEditText(selectedTextPopup.text);
+                  setShowEditInput(true);
+                }}
+                className="p-1.5 text-amber-600 hover:text-amber-700 hover:bg-amber-50 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors"
+                title="Edit / Replace Text"
+              >
+                <Edit3 className="w-3.5 h-3.5 text-amber-600" />
               </button>
 
               {/* Add Note Action */}
@@ -445,6 +573,53 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
               >
                 <X className="w-3.5 h-3.5" />
               </button>
+            </div>
+          ) : showEditInput ? (
+            /* Edit / Replace Text input inside floating menu */
+            <div className="w-72 p-2 space-y-2">
+              <div className="flex items-center justify-between text-[11px] font-semibold text-stone-700">
+                <span className="flex items-center gap-1">
+                  <Edit3 className="w-3.5 h-3.5 text-amber-600" />
+                  Edit / Replace Text
+                </span>
+                <button
+                  onClick={() => setShowEditInput(false)}
+                  className="text-stone-400 hover:text-stone-700"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+              <div className="p-1.5 bg-stone-100 rounded-lg text-[11px] text-stone-500 line-through truncate max-h-12 font-mono">
+                {selectedTextPopup.text}
+              </div>
+              <input
+                type="text"
+                value={editText}
+                onChange={(e) => setEditText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleSaveTextEdit();
+                  }
+                }}
+                placeholder="New replacement text..."
+                className="w-full p-2 text-xs rounded-xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 bg-stone-50 text-stone-800"
+                autoFocus
+              />
+              <div className="flex justify-end gap-1.5 pt-1">
+                <button
+                  onClick={() => setShowEditInput(false)}
+                  className="px-2 py-1 text-[11px] text-stone-500 hover:text-stone-800 rounded-lg"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={handleSaveTextEdit}
+                  disabled={!editText.trim()}
+                  className="px-2.5 py-1 text-[11px] font-medium bg-amber-500 hover:bg-amber-600 text-white rounded-lg disabled:opacity-40"
+                >
+                  Save Replacement
+                </button>
+              </div>
             </div>
           ) : (
             /* Note comment input inside floating menu */

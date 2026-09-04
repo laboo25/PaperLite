@@ -76,7 +76,15 @@ export const ZoomModule: React.FC<ZoomModuleProps> = ({
 
       {/* Popover */}
       {isOpen && (
-        <div className="absolute top-full left-0 mt-1.5 w-64 p-3 bg-white/98 backdrop-blur-xl rounded-2xl shadow-xl border border-stone-200/90 z-50 animate-in fade-in zoom-in-95 duration-150">
+        <div
+          data-no-drag="true"
+          data-popover="true"
+          style={{ WebkitAppRegion: 'no-drag' } as any}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="absolute top-full left-0 mt-1.5 w-64 p-3 bg-white/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-stone-200/90 z-[100] animate-in fade-in zoom-in-95 duration-150 select-none"
+        >
           <div className="flex items-center justify-between pb-2 border-b border-stone-100">
             <span className="text-xs font-bold text-stone-800">Zoom & Viewport</span>
             <span className="text-xs font-mono font-bold text-blue-600">{zoomPercent}%</span>

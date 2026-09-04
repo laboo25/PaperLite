@@ -1,5 +1,6 @@
 import { PDFAnnotation, PDFBookmark, PDFDocumentInfo, ReaderSettings } from '../types';
 import { SAMPLE_DOCUMENTS } from '../data/samplePdfs';
+import { binaryStorage } from './binaryStorage';
 
 const STORAGE_KEYS = {
   LIBRARY: 'paperlite_library_index_v1',
@@ -21,7 +22,8 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   sidebarTab: 'thumbnails',
   smoothScrolling: true,
   renderQuality: 'high',
-  autoSaveProgress: true
+  autoSaveProgress: true,
+  lowPowerMode: false
 };
 
 export class StorageService {
@@ -53,9 +55,24 @@ export class StorageService {
 
   addOrUpdateDocument(doc: PDFDocumentInfo): void {
     const library = this.getLibrary();
-    const existingIndex = library.findIndex((d) => d.id === doc.id || d.fingerprint === doc.fingerprint);
+    const existingIndex = library.findIndex(
+      (d) =>
+        d.id === doc.id ||
+        (doc.fingerprint && d.fingerprint === doc.fingerprint) ||
+        (doc.name && d.name.toLowerCase() === doc.name.toLowerCase() && (d.size === doc.size || !doc.size || !d.size))
+    );
     if (existingIndex >= 0) {
-      library[existingIndex] = { ...library[existingIndex], ...doc, lastOpened: Date.now() };
+      const existing = library[existingIndex];
+      // Keep stable ID if already established
+      const resolvedId = existing.id || doc.id;
+      library[existingIndex] = {
+        ...existing,
+        ...doc,
+        id: resolvedId,
+        lastOpened: Date.now(),
+        lastPageRead: doc.lastPageRead || existing.lastPageRead || 1,
+        totalPages: doc.totalPages || existing.totalPages || 1
+      };
     } else {
       library.unshift({ ...doc, lastOpened: Date.now() });
     }
@@ -63,8 +80,16 @@ export class StorageService {
   }
 
   removeDocument(docId: string): void {
+    const doc = this.getLibrary().find((d) => d.id === docId);
     const library = this.getLibrary().filter((d) => d.id !== docId);
     this.saveLibrary(library);
+
+    // Clean up persistent binary storage
+    if (doc) {
+      binaryStorage.delete(docId, doc.fingerprint, doc.name);
+    } else {
+      binaryStorage.delete(docId);
+    }
   }
 
   toggleFavorite(docId: string): void {
@@ -78,13 +103,54 @@ export class StorageService {
   }
 
   renameDocument(docId: string, newName: string): void {
+    let oldName = '';
     const library = this.getLibrary().map((d) => {
       if (d.id === docId) {
+        oldName = d.name;
         return { ...d, name: newName };
       }
       return d;
     });
     this.saveLibrary(library);
+
+    // Update binary storage alias
+    if (oldName) {
+      binaryStorage.updateDocumentName(docId, oldName, newName);
+    }
+  }
+
+  /**
+   * Persists binary PDF data in persistent multi-tier storage
+   */
+  async saveDocumentData(
+    docId: string,
+    fingerprint: string,
+    data: ArrayBuffer,
+    fileName?: string
+  ): Promise<void> {
+    await binaryStorage.save(docId, fingerprint, data, fileName);
+  }
+
+  /**
+   * Retrieves binary PDF data from persistent storage
+   */
+  async getDocumentData(
+    docId?: string | null,
+    fingerprint?: string | null,
+    fileName?: string | null
+  ): Promise<ArrayBuffer | null> {
+    return await binaryStorage.get(docId, fingerprint, fileName);
+  }
+
+  /**
+   * Deletes document binary from storage
+   */
+  async deleteDocumentData(
+    docId: string,
+    fingerprint?: string,
+    fileName?: string
+  ): Promise<void> {
+    await binaryStorage.delete(docId, fingerprint, fileName);
   }
 
   getOpenTabs(): PDFDocumentInfo[] {

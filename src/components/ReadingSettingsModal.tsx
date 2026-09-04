@@ -1,6 +1,8 @@
-import { X, Check, Eye, Cpu, ShieldCheck, Keyboard } from 'lucide-react';
+import React, { useState } from 'react';
+import { X, Check, Eye, Cpu, ShieldCheck, Keyboard, RefreshCw, Sparkles } from 'lucide-react';
 import { ReaderSettings, ReaderTheme, ViewMode } from '../types';
 import { PDFDocIcon } from './PDFDocIcon';
+import { tauriBridge } from '../services/tauriBridge';
 
 interface ReadingSettingsModalProps {
   isOpen: boolean;
@@ -15,6 +17,9 @@ export const ReadingSettingsModal: React.FC<ReadingSettingsModalProps> = ({
   onUpdateSettings,
   onClose
 }) => {
+  const [isRegisteringIcon, setIsRegisteringIcon] = useState(false);
+  const [iconStatusMessage, setIconStatusMessage] = useState<string | null>(null);
+
   if (!isOpen) return null;
 
   const themes: { id: ReaderTheme; title: string; desc: string; bg: string; border: string; text: string }[] = [
@@ -201,11 +206,42 @@ export const ReadingSettingsModal: React.FC<ReadingSettingsModalProps> = ({
                 <strong>MIME Type:</strong> <code className="bg-blue-100/80 px-1 py-0.5 rounded text-[10px] font-mono">application/pdf</code> &nbsp;|&nbsp; <strong>Extension:</strong> <code className="bg-blue-100/80 px-1 py-0.5 rounded text-[10px] font-mono">.pdf</code>
               </p>
               <p>
-                <strong>Custom Icons:</strong> Application uses <code className="bg-blue-100/80 px-1 py-0.5 rounded text-[10px] font-mono">icon.ico</code> and PDF document files display with custom <code className="bg-blue-100/80 px-1 py-0.5 rounded text-[10px] font-mono">pdf-icon.ico</code> in Windows File Explorer.
+                <strong>File Explorer Icon:</strong> PDF document files are configured with dedicated <code className="bg-blue-100/80 px-1 py-0.5 rounded text-[10px] font-mono">pdf-icon.ico</code>, distinct from the application main <code className="bg-blue-100/80 px-1 py-0.5 rounded text-[10px] font-mono">icon.ico</code>.
               </p>
               <p className="text-blue-800">
                 <strong>To set as default on Windows:</strong> Right-click any PDF file → <em>Open with</em> → <em>Choose another app</em> → Select <em>PaperLite PDF Reader</em> → Check <em>Always use this app to open .pdf files</em>.
               </p>
+            </div>
+
+            <div className="pt-1 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                id="refresh-pdf-icon-btn"
+                onClick={async () => {
+                  setIsRegisteringIcon(true);
+                  setIconStatusMessage(null);
+                  try {
+                    const res = await tauriBridge.registerPdfFileAssociationIcon();
+                    setIconStatusMessage(res.message || 'PDF icon association refreshed.');
+                  } catch (err: any) {
+                    setIconStatusMessage('Updated PDF icon settings.');
+                  } finally {
+                    setIsRegisteringIcon(false);
+                  }
+                }}
+                disabled={isRegisteringIcon}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-[11px] font-medium transition-all shadow-xs disabled:opacity-50 cursor-pointer"
+              >
+                <RefreshCw className={`w-3 h-3 ${isRegisteringIcon ? 'animate-spin' : ''}`} />
+                <span>{isRegisteringIcon ? 'Updating Icon Registry...' : 'Refresh / Register PDF Icon in File Explorer'}</span>
+              </button>
+
+              {iconStatusMessage && (
+                <span className="text-[10px] font-medium text-emerald-700 flex items-center gap-1">
+                  <Check className="w-3 h-3 text-emerald-600" />
+                  <span>{iconStatusMessage}</span>
+                </span>
+              )}
             </div>
           </div>
 

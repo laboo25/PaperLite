@@ -101,7 +101,15 @@ export const HistoryControlsModule: React.FC<HistoryControlsModuleProps> = ({
 
       {/* History Stack Popover */}
       {isOpen && historyStack.length > 0 && (
-        <div className="absolute top-full right-0 mt-1.5 w-64 p-2.5 bg-white/98 backdrop-blur-xl rounded-xl shadow-xl border border-stone-200/90 z-50 animate-in fade-in zoom-in-95 duration-150 space-y-2">
+        <div
+          data-no-drag="true"
+          data-popover="true"
+          style={{ WebkitAppRegion: 'no-drag' } as any}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="absolute top-full right-0 mt-1.5 w-64 p-2.5 bg-white/98 backdrop-blur-xl rounded-xl shadow-2xl border border-stone-200/90 z-[100] animate-in fade-in zoom-in-95 duration-150 space-y-2 select-none"
+        >
           <div className="flex items-center justify-between pb-1.5 border-b border-stone-100">
             <div className="flex items-center gap-1.5 text-xs font-bold text-stone-800">
               <History className="w-3.5 h-3.5 text-blue-600" />

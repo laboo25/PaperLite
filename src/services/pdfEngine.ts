@@ -1,4 +1,5 @@
 import * as pdfjsLib from 'pdfjs-dist';
+// @ts-ignore Vite asset URL query import
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { PDFOutlineItem, SearchMatch } from '../types';
 
@@ -40,69 +41,170 @@ export interface CanvasRenderSession {
   cancelRequested: boolean;
 }
 
+export interface PDFDocumentSession {
+  id: string;
+  fingerprint: string;
+  pdfDocument: pdfjsLib.PDFDocumentProxy;
+  pageDimensions: Map<number, PageDimension>;
+  pageTextCache: Map<number, string>;
+  pageItemsCache: Map<number, PageTextItem[]>;
+  textContentCache: Map<number, any>;
+  numPages: number;
+  title?: string;
+  outline?: PDFOutlineItem[];
+  lastAccessed: number;
+}
+
 class PDFEngineInstance {
-  private pdfDocument: pdfjsLib.PDFDocumentProxy | null = null;
-  private pageDimensions: Map<number, PageDimension> = new Map();
-  private pageTextCache: Map<number, string> = new Map();
-  private pageItemsCache: Map<number, PageTextItem[]> = new Map();
+  private sessions: Map<string, PDFDocumentSession> = new Map();
+  private activeSessionId: string | null = null;
+  private maxSessions: number = 10;
   // Tracks active render sessions per HTMLCanvasElement
   private canvasSessions: WeakMap<HTMLCanvasElement, CanvasRenderSession> = new WeakMap();
 
-  async loadDocument(data: ArrayBuffer | Uint8Array | string): Promise<{
+  private get activeSession(): PDFDocumentSession | null {
+    if (!this.activeSessionId) return null;
+    return this.sessions.get(this.activeSessionId) || null;
+  }
+
+  get pdfDocument(): pdfjsLib.PDFDocumentProxy | null {
+    return this.activeSession?.pdfDocument || null;
+  }
+
+  getActiveSessionId(): string | null {
+    return this.activeSessionId;
+  }
+
+  hasDocument(sessionId: string, fingerprint?: string): boolean {
+    if (this.sessions.has(sessionId)) return true;
+    if (fingerprint) {
+      for (const sess of this.sessions.values()) {
+        if (sess.fingerprint === fingerprint) return true;
+      }
+    }
+    return false;
+  }
+
+  switchDocument(sessionId: string, fingerprint?: string): boolean {
+    if (this.sessions.has(sessionId)) {
+      this.activeSessionId = sessionId;
+      this.sessions.get(sessionId)!.lastAccessed = Date.now();
+      return true;
+    }
+
+    if (fingerprint) {
+      for (const [sId, sess] of this.sessions.entries()) {
+        if (sess.fingerprint === fingerprint) {
+          sess.lastAccessed = Date.now();
+          this.sessions.set(sessionId, sess);
+          this.activeSessionId = sessionId;
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  async loadDocument(
+    data: ArrayBuffer | Uint8Array | string,
+    sessionId?: string,
+    fingerprintHint?: string
+  ): Promise<{
     numPages: number;
     fingerprint: string;
     title?: string;
+    fromCache?: boolean;
   }> {
-    // Cancel any previous renders
-    this.cancelAllRenders();
-    this.pageDimensions.clear();
-    this.pageTextCache.clear();
-    this.pageItemsCache.clear();
+    // 1. If this exact session ID is already loaded in memory
+    if (sessionId && this.sessions.has(sessionId)) {
+      const existing = this.sessions.get(sessionId)!;
+      existing.lastAccessed = Date.now();
+      this.activeSessionId = sessionId;
+      return {
+        numPages: existing.numPages,
+        fingerprint: existing.fingerprint,
+        title: existing.title,
+        fromCache: true
+      };
+    }
 
+    // 2. If fingerprint matches an existing parsed session, reuse it
+    if (fingerprintHint) {
+      for (const [sId, sess] of this.sessions.entries()) {
+        if (sess.fingerprint === fingerprintHint) {
+          sess.lastAccessed = Date.now();
+          if (sessionId && !this.sessions.has(sessionId)) {
+            this.sessions.set(sessionId, sess);
+          }
+          this.activeSessionId = sessionId || sId;
+          return {
+            numPages: sess.numPages,
+            fingerprint: sess.fingerprint,
+            title: sess.title,
+            fromCache: true
+          };
+        }
+      }
+    }
+
+    // 3. Evict oldest session if we have reached max capacity (memory protection)
+    if (this.sessions.size >= this.maxSessions) {
+      let oldestKey: string | null = null;
+      let oldestTime = Infinity;
+      for (const [key, sess] of this.sessions.entries()) {
+        if (sess.lastAccessed < oldestTime && key !== this.activeSessionId) {
+          oldestTime = sess.lastAccessed;
+          oldestKey = key;
+        }
+      }
+      if (oldestKey) {
+        this.unloadDocument(oldestKey);
+      }
+    }
+
+    // 4. Parse document with PDF.js
     let docParams: any;
     if (typeof data === 'string') {
       docParams = {
         url: data,
-        cMapPacked: true
+        cMapPacked: true,
+        disableAutoFetch: false,
+        disableStream: false
       };
     } else {
       let uint8: Uint8Array;
       if (data instanceof Uint8Array) {
-        // Create an isolated copy to prevent buffer detachment
-        uint8 = new Uint8Array(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
+        uint8 = data;
       } else if (data instanceof ArrayBuffer) {
-        uint8 = new Uint8Array(data.slice(0));
+        uint8 = new Uint8Array(data);
       } else {
         uint8 = new Uint8Array(data);
       }
       docParams = {
         data: uint8,
-        cMapPacked: true
+        cMapPacked: true,
+        disableAutoFetch: false,
+        disableStream: false,
+        isEvalSupported: false
       };
     }
 
     const loadingTask = pdfjsLib.getDocument(docParams);
+    const pdfDocument = await loadingTask.promise;
+    const numPages = pdfDocument.numPages;
+    const fingerprint = pdfDocument.fingerprints?.[0] || fingerprintHint || ('doc-' + Date.now());
 
-    this.pdfDocument = await loadingTask.promise;
-    const numPages = this.pdfDocument.numPages;
-    const fingerprint = this.pdfDocument.fingerprints?.[0] || 'doc-' + Date.now();
-
-    // Cache page 1 dimensions as default
-    try {
-      const firstPage = await this.pdfDocument.getPage(1);
-      const viewport = firstPage.getViewport({ scale: 1.0 });
-      this.pageDimensions.set(1, {
-        width: viewport.width,
-        height: viewport.height,
-        aspectRatio: viewport.width / viewport.height
-      });
-    } catch (err) {
-      console.warn('Could not pre-fetch first page dimensions:', err);
+    // Dynamically throttle maximum concurrent sessions if document has large page count
+    if (numPages > 80) {
+      this.maxSessions = 3;
+    } else {
+      this.maxSessions = 10;
     }
 
     let title: string | undefined;
     try {
-      const meta = await this.pdfDocument.getMetadata();
+      const meta = await pdfDocument.getMetadata();
       const info = meta?.info as any;
       if (info?.Title) {
         title = info.Title;
@@ -111,34 +213,125 @@ class PDFEngineInstance {
       // Ignore metadata parsing error
     }
 
+    const targetSessionId = sessionId || fingerprint;
+    const newSession: PDFDocumentSession = {
+      id: targetSessionId,
+      fingerprint,
+      pdfDocument,
+      pageDimensions: new Map(),
+      pageTextCache: new Map(),
+      pageItemsCache: new Map(),
+      textContentCache: new Map(),
+      numPages,
+      title,
+      lastAccessed: Date.now()
+    };
+
+    // Pre-cache page 1 dimensions as default
+    try {
+      const firstPage = await pdfDocument.getPage(1);
+      const viewport = firstPage.getViewport({ scale: 1.0 });
+      newSession.pageDimensions.set(1, {
+        width: viewport.width,
+        height: viewport.height,
+        aspectRatio: viewport.width / viewport.height
+      });
+    } catch (err) {
+      console.warn('Could not pre-fetch first page dimensions:', err);
+    }
+
+    this.sessions.set(targetSessionId, newSession);
+    this.activeSessionId = targetSessionId;
+
     return {
       numPages,
       fingerprint,
-      title
+      title,
+      fromCache: false
     };
+  }
+
+  unloadDocument(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    // Check if any other session points to the same PDFDocumentProxy
+    let sharedCount = 0;
+    for (const s of this.sessions.values()) {
+      if (s.pdfDocument === session.pdfDocument) {
+        sharedCount++;
+      }
+    }
+
+    this.sessions.delete(sessionId);
+    if (this.activeSessionId === sessionId) {
+      this.activeSessionId = null;
+    }
+
+    // Only destroy the underlying PDFDocumentProxy if no other session shares it
+    if (sharedCount <= 1) {
+      try {
+        session.pdfDocument.destroy();
+      } catch (e) {
+        console.warn('Session pdfDocument destroy notice:', e);
+      }
+      session.pageDimensions.clear();
+      session.pageTextCache.clear();
+      session.pageItemsCache.clear();
+      session.textContentCache.clear();
+    }
   }
 
   get totalPages(): number {
-    return this.pdfDocument ? this.pdfDocument.numPages : 0;
+    return this.activeSession?.numPages || 0;
   }
 
-  async getPageDimension(pageNumber: number): Promise<PageDimension> {
-    if (this.pageDimensions.has(pageNumber)) {
-      return this.pageDimensions.get(pageNumber)!;
+  getCachedPageDimension(pageNumber: number, rotation = 0): PageDimension | null {
+    const session = this.activeSession;
+    if (!session) return null;
+
+    const cacheKey = (pageNumber * 1000) + ((rotation % 360 + 360) % 360);
+    if (session.pageDimensions.has(cacheKey)) {
+      return session.pageDimensions.get(cacheKey)!;
     }
-    if (!this.pdfDocument) {
+
+    // Fallback to page 1's measured dimension if available
+    const page1Key = 1000 + ((rotation % 360 + 360) % 360);
+    if (session.pageDimensions.has(page1Key)) {
+      return session.pageDimensions.get(page1Key)!;
+    }
+
+    return null;
+  }
+
+  async getPageDimension(pageNumber: number, rotation = 0): Promise<PageDimension> {
+    const session = this.activeSession;
+    if (!session || !session.pdfDocument) {
       return { width: 595, height: 842, aspectRatio: 595 / 842 };
     }
 
-    const page = await this.pdfDocument.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: 1.0 });
-    const dim: PageDimension = {
-      width: viewport.width,
-      height: viewport.height,
-      aspectRatio: viewport.width / viewport.height
-    };
-    this.pageDimensions.set(pageNumber, dim);
-    return dim;
+    const cacheKey = (pageNumber * 1000) + ((rotation % 360 + 360) % 360);
+    if (session.pageDimensions.has(cacheKey)) {
+      return session.pageDimensions.get(cacheKey)!;
+    }
+
+    try {
+      const page = await session.pdfDocument.getPage(pageNumber);
+      const viewport = page.getViewport({
+        scale: 1.0,
+        rotation: (page.rotate + rotation) % 360
+      });
+      const dim: PageDimension = {
+        width: viewport.width,
+        height: viewport.height,
+        aspectRatio: viewport.width / viewport.height
+      };
+      session.pageDimensions.set(cacheKey, dim);
+      return dim;
+    } catch (err) {
+      console.warn(`Could not get page ${pageNumber} dimension:`, err);
+      return { width: 595, height: 842, aspectRatio: 595 / 842 };
+    }
   }
 
   async renderPage({
@@ -184,8 +377,8 @@ class PDFEngineInstance {
       const page = await this.pdfDocument.getPage(pageNumber);
       if (currentSession.cancelRequested) return;
 
-      // Device Pixel Ratio scaling for crisp text on retina / HiDPI monitors
-      const pixelRatio = renderQuality === 'high' ? (window.devicePixelRatio || 1) : 1;
+      // Device Pixel Ratio scaling: Capped to 1.5 max in high mode to prevent 4x texture memory explosion on Retina/4K displays
+      const pixelRatio = renderQuality === 'high' ? Math.min(window.devicePixelRatio || 1, 1.5) : 1;
       const finalScale = scale * pixelRatio;
 
       const viewport = page.getViewport({
@@ -224,6 +417,13 @@ class PDFEngineInstance {
         if (err?.name !== 'RenderingCancelledException' && !currentSession.cancelRequested) {
           console.warn(`Page ${pageNumber} render notice:`, err?.message || err);
         }
+      } finally {
+        // Free internal operator lists and glyph caches in PDF.js for this page
+        try {
+          page.cleanup();
+        } catch {
+          // safe
+        }
       }
     };
 
@@ -248,21 +448,32 @@ class PDFEngineInstance {
         }
       }
     }
+
+    // Zero-out canvas dimensions to release underlying GPU backing store immediately
+    try {
+      canvas.width = 0;
+      canvas.height = 0;
+    } catch {
+      // safe
+    }
   }
 
   async getPageText(pageNumber: number): Promise<string> {
-    if (this.pageTextCache.has(pageNumber)) {
-      return this.pageTextCache.get(pageNumber)!;
+    const session = this.activeSession;
+    if (!session || !session.pdfDocument) return '';
+
+    if (session.pageTextCache.has(pageNumber)) {
+      return session.pageTextCache.get(pageNumber)!;
     }
-    if (!this.pdfDocument) return '';
 
     try {
-      const page = await this.pdfDocument.getPage(pageNumber);
+      const page = await session.pdfDocument.getPage(pageNumber);
       const textContent = await page.getTextContent();
       const text = textContent.items
         .map((item: any) => ('str' in item ? item.str : ''))
         .join(' ');
-      this.pageTextCache.set(pageNumber, text);
+      this.trimCaches(session);
+      session.pageTextCache.set(pageNumber, text);
       return text;
     } catch (err) {
       console.warn(`Error extracting text for page ${pageNumber}:`, err);
@@ -271,13 +482,15 @@ class PDFEngineInstance {
   }
 
   async getPageTextItems(pageNumber: number): Promise<PageTextItem[]> {
-    if (this.pageItemsCache.has(pageNumber)) {
-      return this.pageItemsCache.get(pageNumber)!;
+    const session = this.activeSession;
+    if (!session || !session.pdfDocument) return [];
+
+    if (session.pageItemsCache.has(pageNumber)) {
+      return session.pageItemsCache.get(pageNumber)!;
     }
-    if (!this.pdfDocument) return [];
 
     try {
-      const page = await this.pdfDocument.getPage(pageNumber);
+      const page = await session.pdfDocument.getPage(pageNumber);
       const viewport = page.getViewport({ scale: 1.0 });
       const textContent = await page.getTextContent();
       const items: PageTextItem[] = [];
@@ -308,7 +521,8 @@ class PDFEngineInstance {
         });
       }
 
-      this.pageItemsCache.set(pageNumber, items);
+      this.trimCaches(session);
+      session.pageItemsCache.set(pageNumber, items);
       return items;
     } catch (err) {
       console.warn(`Error extracting text items for page ${pageNumber}:`, err);
@@ -316,12 +530,78 @@ class PDFEngineInstance {
     }
   }
 
+  /**
+   * Renders high-fidelity, pixel-perfect selectable text layer using PDF.js official TextLayer engine
+   */
+  async renderTextLayer({
+    container,
+    pageNumber,
+    scale,
+    rotation = 0
+  }: {
+    container: HTMLElement;
+    pageNumber: number;
+    scale: number;
+    rotation?: number;
+  }): Promise<{ cancel: () => void; promise: Promise<void> } | null> {
+    const session = this.activeSession;
+    if (!session || !session.pdfDocument || !container) return null;
+
+    try {
+      const page = await session.pdfDocument.getPage(pageNumber);
+      const viewport = page.getViewport({
+        scale,
+        rotation: (page.rotate + rotation) % 360
+      });
+
+      // Clear previous text layer content safely
+      container.replaceChildren();
+
+      // Configure required CSS custom variables and bounds for PDF.js TextLayer
+      container.style.setProperty('--scale-factor', `${scale}`);
+      container.style.setProperty('--total-scale-factor', `${scale}`);
+      container.style.width = `${viewport.width}px`;
+      container.style.height = `${viewport.height}px`;
+
+      let textContent = session.textContentCache.get(pageNumber);
+      if (!textContent) {
+        textContent = await page.getTextContent();
+        this.trimCaches(session);
+        session.textContentCache.set(pageNumber, textContent);
+      }
+
+      const textLayer = new (pdfjsLib as any).TextLayer({
+        textContentSource: textContent,
+        container,
+        viewport
+      });
+
+      const promise = textLayer.render();
+      return {
+        cancel: () => {
+          try {
+            textLayer.cancel();
+          } catch {
+            // Cancel safe
+          }
+        },
+        promise
+      };
+    } catch (err: any) {
+      if (err?.name !== 'AbortException') {
+        console.warn(`TextLayer error for page ${pageNumber}:`, err);
+      }
+      return null;
+    }
+  }
+
   async searchDocument(query: string): Promise<SearchMatch[]> {
-    if (!this.pdfDocument || !query.trim()) return [];
+    const session = this.activeSession;
+    if (!session || !session.pdfDocument || !query.trim()) return [];
     const lowerQuery = query.toLowerCase().trim();
     const matches: SearchMatch[] = [];
 
-    const numPages = this.pdfDocument.numPages;
+    const numPages = session.numPages;
     for (let p = 1; p <= numPages; p++) {
       const text = await this.getPageText(p);
       const lowerText = text.toLowerCase();
@@ -351,10 +631,17 @@ class PDFEngineInstance {
   }
 
   async getOutline(): Promise<PDFOutlineItem[]> {
-    if (!this.pdfDocument) return [];
+    const session = this.activeSession;
+    if (!session || !session.pdfDocument) return [];
+
+    if (session.outline) {
+      return session.outline;
+    }
+
     try {
-      const outline = await this.pdfDocument.getOutline();
+      const outline = await session.pdfDocument.getOutline();
       if (!outline || outline.length === 0) {
+        session.outline = [];
         return [];
       }
 
@@ -366,10 +653,10 @@ class PDFEngineInstance {
             try {
               let ref = item.dest;
               if (typeof ref === 'string') {
-                ref = await this.pdfDocument!.getDestination(ref);
+                ref = await session.pdfDocument.getDestination(ref);
               }
               if (Array.isArray(ref) && ref[0]) {
-                const pageIndex = await this.pdfDocument!.getPageIndex(ref[0]);
+                const pageIndex = await session.pdfDocument.getPageIndex(ref[0]);
                 pageNumber = pageIndex + 1;
               }
             } catch {
@@ -392,7 +679,9 @@ class PDFEngineInstance {
         return result;
       };
 
-      return await convertOutline(outline);
+      const parsedOutline = await convertOutline(outline);
+      session.outline = parsedOutline;
+      return parsedOutline;
     } catch (err) {
       console.warn('Error reading outline:', err);
       return [];
@@ -400,9 +689,10 @@ class PDFEngineInstance {
   }
 
   async renderThumbnail(pageNumber: number, maxDimension = 160): Promise<string> {
-    if (!this.pdfDocument) return '';
+    const session = this.activeSession;
+    if (!session || !session.pdfDocument) return '';
     try {
-      const page = await this.pdfDocument.getPage(pageNumber);
+      const page = await session.pdfDocument.getPage(pageNumber);
       const unscaledViewport = page.getViewport({ scale: 1.0 });
       const scale = Math.min(
         maxDimension / unscaledViewport.width,
@@ -420,11 +710,16 @@ class PDFEngineInstance {
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       await page.render({ canvasContext: ctx, viewport }).promise;
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
 
-      // Clean up temp canvas
-      canvas.width = 1;
-      canvas.height = 1;
+      // Clean up temp page and canvas bitmap memory immediately
+      try {
+        page.cleanup();
+      } catch {
+        // safe
+      }
+      canvas.width = 0;
+      canvas.height = 0;
 
       return dataUrl;
     } catch (e) {
@@ -433,22 +728,80 @@ class PDFEngineInstance {
     }
   }
 
+  /**
+   * Trims text and AST caches to prevent memory bloat on large documents
+   */
+  private trimCaches(session: PDFDocumentSession) {
+    const MAX_CACHED_ITEMS = 30;
+    if (session.textContentCache.size > MAX_CACHED_ITEMS) {
+      const keys = Array.from(session.textContentCache.keys()).slice(0, 15);
+      for (const k of keys) {
+        session.textContentCache.delete(k);
+        session.pageItemsCache.delete(k);
+        session.pageTextCache.delete(k);
+      }
+    }
+  }
+
+  /**
+   * Explicitly purges all cached text content and triggers engine cleanup for low-end devices
+   */
+  purgeUnusedMemory(): void {
+    this.canvasSessions = new WeakMap();
+    for (const session of this.sessions.values()) {
+      session.textContentCache.clear();
+      session.pageItemsCache.clear();
+      session.pageTextCache.clear();
+      try {
+        session.pdfDocument.cleanup();
+      } catch {
+        // safe
+      }
+    }
+  }
+
+  /**
+   * Retrieves raw binary data from active PDF session for Save As / Export operations
+   */
+  async getDocumentBinary(): Promise<Uint8Array | null> {
+    const session = this.activeSession;
+    if (!session || !session.pdfDocument) return null;
+    try {
+      if (typeof (session.pdfDocument as any).saveDocument === 'function') {
+        return await (session.pdfDocument as any).saveDocument();
+      }
+      if (typeof (session.pdfDocument as any).getData === 'function') {
+        return await (session.pdfDocument as any).getData();
+      }
+    } catch (err) {
+      console.warn('saveDocument/getData notice:', err);
+    }
+    return null;
+  }
+
   cancelAllRenders() {
     this.canvasSessions = new WeakMap();
   }
 
   destroy() {
     this.cancelAllRenders();
-    if (this.pdfDocument) {
-      try {
-        this.pdfDocument.destroy();
-      } catch {
-        // Ignored
+    const destroyedProxies = new Set<pdfjsLib.PDFDocumentProxy>();
+    for (const session of this.sessions.values()) {
+      if (!destroyedProxies.has(session.pdfDocument)) {
+        try {
+          session.pdfDocument.destroy();
+        } catch {
+          // Ignored
+        }
+        destroyedProxies.add(session.pdfDocument);
       }
-      this.pdfDocument = null;
+      session.pageDimensions.clear();
+      session.pageTextCache.clear();
+      session.pageItemsCache.clear();
+      session.textContentCache.clear();
     }
-    this.pageDimensions.clear();
-    this.pageTextCache.clear();
+    this.sessions.clear();
+    this.activeSessionId = null;
   }
 }
 

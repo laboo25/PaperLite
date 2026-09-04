@@ -79,7 +79,15 @@ export const LayoutModule: React.FC<LayoutModuleProps> = ({
 
       {/* Popover */}
       {isOpen && (
-        <div className="absolute top-full left-0 mt-1.5 w-56 p-2 bg-white/98 backdrop-blur-xl rounded-2xl shadow-xl border border-stone-200/90 z-50 animate-in fade-in zoom-in-95 duration-150 space-y-1">
+        <div
+          data-no-drag="true"
+          data-popover="true"
+          style={{ WebkitAppRegion: 'no-drag' } as any}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="absolute top-full left-0 mt-1.5 w-56 p-2 bg-white/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-stone-200/90 z-[100] animate-in fade-in zoom-in-95 duration-150 space-y-1 select-none"
+        >
           <div className="px-2 py-1 text-[11px] font-bold text-stone-400 uppercase tracking-wider">
             Document Layout
           </div>

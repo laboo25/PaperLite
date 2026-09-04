@@ -96,7 +96,15 @@ export const AnnotationModule: React.FC<AnnotationModuleProps> = ({
 
       {/* Popover */}
       {isOpen && (
-        <div className="absolute top-full right-0 mt-1.5 w-68 p-3 bg-white/98 backdrop-blur-xl rounded-2xl shadow-xl border border-stone-200/90 z-50 animate-in fade-in zoom-in-95 duration-150 space-y-3">
+        <div
+          data-no-drag="true"
+          data-popover="true"
+          style={{ WebkitAppRegion: 'no-drag' } as any}
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          className="absolute top-full right-0 mt-1.5 w-68 p-3 bg-white/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-stone-200/90 z-[100] animate-in fade-in zoom-in-95 duration-150 space-y-3 select-none"
+        >
           <div className="flex items-center justify-between pb-1 border-b border-stone-100">
             <span className="text-xs font-bold text-stone-800">Edit & Annotation Studio</span>
             <span className="text-[10px] text-stone-400 uppercase font-mono tracking-wider">

@@ -86,4 +86,5 @@ export interface ReaderSettings {
   smoothScrolling: boolean;
   renderQuality: 'normal' | 'high';
   autoSaveProgress: boolean;
+  lowPowerMode?: boolean;
 }

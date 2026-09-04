@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { pdfEngine, PageTextItem } from '../services/pdfEngine';
+import { pdfEngine } from '../services/pdfEngine';
 import { AnnotationTool, PDFAnnotation, ReaderTheme } from '../types';
 import { MessageSquare, Trash2, X, Check } from 'lucide-react';
 
@@ -33,11 +33,11 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawCanvasRef = useRef<HTMLCanvasElement>(null);
+  const textLayerRef = useRef<HTMLDivElement>(null);
 
   const [isVisible, setIsVisible] = useState(!onVisibleChange);
   const [isLoading, setIsLoading] = useState(true);
   const [dimensions, setDimensions] = useState({ width: 595, height: 842 });
-  const [textItems, setTextItems] = useState<PageTextItem[]>([]);
 
   // Pen Drawing state
   const [isDrawing, setIsDrawing] = useState(false);
@@ -53,25 +53,63 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
   const [newNotePos, setNewNotePos] = useState<{ x: number; y: number } | null>(null);
   const [newNoteText, setNewNoteText] = useState('');
 
-  // Fetch page dimensions and text content items
+  // Fetch page dimensions with current rotation
   useEffect(() => {
     let isMounted = true;
-    pdfEngine.getPageDimension(pageNumber).then((dim) => {
+    pdfEngine.getPageDimension(pageNumber, rotation).then((dim) => {
       if (isMounted) {
         setDimensions({ width: dim.width, height: dim.height });
-      }
-    });
-
-    pdfEngine.getPageTextItems(pageNumber).then((items) => {
-      if (isMounted) {
-        setTextItems(items);
       }
     });
 
     return () => {
       isMounted = false;
     };
-  }, [pageNumber]);
+  }, [pageNumber, rotation]);
+
+  // High-fidelity selectable text layer rendering with official PDF.js engine
+  useEffect(() => {
+    const textContainer = textLayerRef.current;
+    if (!textContainer) return;
+
+    if (!isVisible) {
+      textContainer.replaceChildren();
+      return;
+    }
+
+    let cancelObj: { cancel: () => void; promise: Promise<void> } | null = null;
+    let isCancelled = false;
+
+    pdfEngine
+      .renderTextLayer({
+        container: textContainer,
+        pageNumber,
+        scale,
+        rotation
+      })
+      .then((res) => {
+        if (isCancelled) {
+          res?.cancel();
+        } else {
+          cancelObj = res;
+        }
+      })
+      .catch((err) => {
+        if (!isCancelled) {
+          console.warn('Text layer render notice:', err);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+      if (cancelObj) {
+        cancelObj.cancel();
+      }
+      if (textContainer) {
+        textContainer.replaceChildren();
+      }
+    };
+  }, [pageNumber, scale, rotation, isVisible]);
 
   // Viewport virtualization & memory recycling
   useEffect(() => {
@@ -145,6 +183,12 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
     const dCanvas = drawCanvasRef.current;
     if (!dCanvas) return;
 
+    if (!isVisible) {
+      dCanvas.width = 0;
+      dCanvas.height = 0;
+      return;
+    }
+
     dCanvas.width = dimensions.width * scale;
     dCanvas.height = dimensions.height * scale;
     const ctx = dCanvas.getContext('2d');
@@ -186,7 +230,14 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
       }
       ctx.stroke();
     }
-  }, [annotations, currentStroke, pageNumber, scale, dimensions, activeColor]);
+
+    return () => {
+      if (dCanvas) {
+        dCanvas.width = 0;
+        dCanvas.height = 0;
+      }
+    };
+  }, [annotations, currentStroke, pageNumber, scale, dimensions, activeColor, isVisible]);
 
   // Pointer Down (Pen drawing / Sticky note / Area highlight)
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -203,13 +254,13 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
       setNewNotePos({ x, y });
       setNewNoteText('');
     } else if (activeTool === 'highlight') {
-      // Check if user clicked on background to start area highlight drag
+      // Area box highlight: only if Shift key is pressed or clicked explicitly outside text
       const target = e.target as HTMLElement;
-      if (target.tagName !== 'SPAN') {
+      const isSpan = target.tagName === 'SPAN' || target.closest('span');
+      if (e.shiftKey && !isSpan) {
         setIsHighlightDragging(true);
         setHighlightStart({ x, y });
         setHighlightCurrent({ x, y });
-        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       }
     }
   };
@@ -354,67 +405,82 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
         }}
       />
 
-      {/* Saved Highlights and Underlines Overlay */}
+      {/* Saved Highlights, Underlines, Strikes, and Text Edits */}
       {highlightAnnotations.map((hl) => (
         <div key={hl.id} className="absolute inset-0 pointer-events-none z-15">
-          {hl.rects?.map((r, rIdx) => (
+          {hl.rects?.map((r, rIdx) => {
+            const isStrike = hl.type === 'strike';
+            const isUnderline = hl.type === 'underline';
+            const isHighlight = hl.type === 'highlight';
+
+            return (
+              <div
+                key={rIdx}
+                className={`absolute transition-opacity rounded-xs ${
+                  activeTool === 'eraser'
+                    ? 'pointer-events-auto cursor-pointer hover:opacity-100 hover:ring-2 hover:ring-rose-500'
+                    : 'pointer-events-none'
+                }`}
+                style={{
+                  left: `${r.x * scale}px`,
+                  top: isStrike ? `${(r.y + r.height * 0.45) * scale}px` : `${r.y * scale}px`,
+                  width: `${r.width * scale}px`,
+                  height: isStrike ? '2.5px' : `${r.height * scale}px`,
+                  backgroundColor: isStrike
+                    ? (hl.color || '#EF4444')
+                    : isHighlight
+                    ? hl.color
+                    : 'transparent',
+                  borderBottom: isUnderline ? `2.5px solid ${hl.color}` : 'none',
+                  opacity: isHighlight ? 0.45 : 1,
+                  mixBlendMode: isHighlight ? 'multiply' : 'normal'
+                }}
+                title={hl.comment ? `${hl.comment} (${hl.text})` : (hl.text ? `"${hl.text}"` : 'Annotation')}
+                onClick={(e) => {
+                  if (activeTool === 'eraser') {
+                    e.stopPropagation();
+                    onDeleteAnnotation(hl.id);
+                  }
+                }}
+              />
+            );
+          })}
+
+          {/* Inline Edit Callout Badge for edited or annotated text */}
+          {hl.comment && hl.rects && hl.rects.length > 0 && (
             <div
-              key={rIdx}
-              className={`absolute transition-opacity rounded-xs ${
-                activeTool === 'eraser'
-                  ? 'pointer-events-auto cursor-pointer hover:opacity-100 hover:ring-2 hover:ring-rose-500'
-                  : 'pointer-events-none'
-              }`}
+              className="absolute z-16 pointer-events-auto flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500 text-white text-[10px] font-medium shadow-xs cursor-pointer hover:scale-105 transition-transform"
               style={{
-                left: `${r.x * scale}px`,
-                top: `${r.y * scale}px`,
-                width: `${r.width * scale}px`,
-                height: `${r.height * scale}px`,
-                backgroundColor: hl.type === 'highlight' ? hl.color : 'transparent',
-                borderBottom: hl.type === 'underline' ? `3px solid ${hl.color}` : 'none',
-                opacity: hl.type === 'highlight' ? 0.45 : 1,
-                mixBlendMode: 'multiply'
+                left: `${(hl.rects[hl.rects.length - 1].x + hl.rects[hl.rects.length - 1].width) * scale + 4}px`,
+                top: `${hl.rects[hl.rects.length - 1].y * scale}px`
               }}
-              title={hl.text ? `"${hl.text}"` : 'Highlight'}
+              title={hl.comment}
               onClick={(e) => {
+                e.stopPropagation();
                 if (activeTool === 'eraser') {
-                  e.stopPropagation();
                   onDeleteAnnotation(hl.id);
                 }
               }}
-            />
-          ))}
+            >
+              <span>{hl.comment.startsWith('Edit:') ? hl.comment : `✏️ ${hl.comment}`}</span>
+            </div>
+          )}
         </div>
       ))}
 
-      {/* Interactive Selectable Text Layer */}
+      {/* Official PDF.js High-Fidelity Selectable Text Layer */}
       <div
-        className={`pdf-text-layer absolute inset-0 z-20 overflow-hidden leading-none ${
-          activeTool === 'select' || activeTool === 'highlight'
-            ? 'pointer-events-auto select-text'
-            : 'pointer-events-none select-none'
+        ref={textLayerRef}
+        className={`textLayer pdf-text-layer absolute inset-0 z-20 overflow-hidden leading-none select-text ${
+          activeTool === 'pen' || activeTool === 'eraser'
+            ? 'pointer-events-none select-none'
+            : 'pointer-events-auto select-text cursor-text'
         }`}
         style={{
           width: `${displayWidth}px`,
           height: `${displayHeight}px`
         }}
-      >
-        {textItems.map((item, idx) => (
-          <span
-            key={idx}
-            style={{
-              left: `${item.x * scale}px`,
-              top: `${item.y * scale}px`,
-              width: item.width ? `${item.width * scale}px` : 'auto',
-              height: item.height ? `${item.height * scale}px` : `${item.fontSize * scale}px`,
-              fontSize: `${item.fontSize * scale}px`,
-              fontFamily: 'sans-serif'
-            }}
-          >
-            {item.str}
-          </span>
-        ))}
-      </div>
+      />
 
       {/* Live Area Highlight Drag Preview */}
       {isHighlightDragging && highlightStart && highlightCurrent && (

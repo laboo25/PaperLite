@@ -58,18 +58,97 @@
   user-select: none;
 }
 
-/* PDF Text Selection Styling */
-.pdf-text-layer ::selection {
-  background: rgba(59, 130, 246, 0.35);
-  color: transparent;
+/* High-Fidelity Pixel-Perfect PDF Text Layer Styling */
+.textLayer,
+.pdf-text-layer {
+  position: absolute;
+  text-align: initial;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  -webkit-text-size-adjust: none;
+  -moz-text-size-adjust: none;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  z-index: 20;
+  -webkit-user-select: text !important;
+  user-select: text !important;
+  pointer-events: auto;
 }
 
+.textLayer :is(span, br),
+.pdf-text-layer :is(span, br),
+.textLayer span,
 .pdf-text-layer span {
-  color: transparent;
+  color: transparent !important;
   position: absolute;
   white-space: pre;
   cursor: text;
   transform-origin: 0% 0%;
+  -webkit-user-select: text !important;
+  user-select: text !important;
+  pointer-events: auto;
+}
+
+.textLayer > :not(.markedContent),
+.textLayer .markedContent span:not(.markedContent),
+.pdf-text-layer > :not(.markedContent) {
+  z-index: 1;
+}
+
+.textLayer span.markedContent {
+  top: 0;
+  height: 0;
+}
+
+.textLayer span[role="img"],
+.pdf-text-layer span[role="img"] {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+  cursor: text;
+}
+
+.textLayer ::-moz-selection,
+.pdf-text-layer ::-moz-selection,
+.textLayer span::-moz-selection,
+.pdf-text-layer span::-moz-selection {
+  background: rgba(59, 130, 246, 0.4) !important;
+  color: transparent !important;
+}
+
+.textLayer ::selection,
+.pdf-text-layer ::selection,
+.textLayer span::selection,
+.pdf-text-layer span::selection {
+  background: rgba(59, 130, 246, 0.4) !important;
+  color: transparent !important;
+}
+
+.textLayer br::-moz-selection,
+.textLayer br::selection,
+.pdf-text-layer br::-moz-selection,
+.pdf-text-layer br::selection {
+  background: transparent !important;
+}
+
+.textLayer .endOfContent,
+.pdf-text-layer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: default;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+}
+
+.textLayer.selecting .endOfContent,
+.pdf-text-layer.selecting .endOfContent {
+  top: 0;
 }
 
 /* iOS Glass blur effects */
