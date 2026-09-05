@@ -2,6 +2,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 // @ts-ignore Vite asset URL query import
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { PDFOutlineItem, SearchMatch } from '../types';
+import { resourceGovernor } from './resourceGovernor';
 
 // Setup PDF.js worker using same-origin bundled local asset
 if (typeof window !== 'undefined') {
@@ -18,6 +19,8 @@ export interface RenderPageOptions {
   scale: number;
   rotation?: number;
   renderQuality?: 'normal' | 'high';
+  lowPowerMode?: boolean;
+  resourceBoundaryEnabled?: boolean;
 }
 
 export interface PageDimension {
@@ -61,6 +64,41 @@ class PDFEngineInstance {
   private maxSessions: number = 10;
   // Tracks active render sessions per HTMLCanvasElement
   private canvasSessions: WeakMap<HTMLCanvasElement, CanvasRenderSession> = new WeakMap();
+  private canvasRegistrationIds: WeakMap<HTMLCanvasElement, string> = new WeakMap();
+
+  // Resource Boundary Render Queue
+  private activeRenderCount: number = 0;
+  private renderQueue: {
+    canvas: HTMLCanvasElement;
+    pageNumber: number;
+    execute: () => Promise<void>;
+    cancel: () => void;
+    isCancelled: boolean;
+  }[] = [];
+
+  constructor() {
+    resourceGovernor.registerEmergencyPurgeHandler(() => {
+      this.purgeUnusedMemory();
+    });
+  }
+
+  private processRenderQueue(lowPowerMode?: boolean, boundaryEnabled?: boolean) {
+    const maxConcurrency = resourceGovernor.getMaxConcurrency(lowPowerMode, boundaryEnabled !== false);
+    while (this.activeRenderCount < maxConcurrency && this.renderQueue.length > 0) {
+      const nextItem = this.renderQueue.shift();
+      if (!nextItem) break;
+      if (nextItem.isCancelled) continue;
+
+      this.activeRenderCount++;
+      nextItem
+        .execute()
+        .catch((e) => console.warn('Queued render error:', e))
+        .finally(() => {
+          this.activeRenderCount = Math.max(0, this.activeRenderCount - 1);
+          this.processRenderQueue(lowPowerMode, boundaryEnabled);
+        });
+    }
+  }
 
   private get activeSession(): PDFDocumentSession | null {
     if (!this.activeSessionId) return null;
@@ -339,7 +377,9 @@ class PDFEngineInstance {
     pageNumber,
     scale,
     rotation = 0,
-    renderQuality = 'high'
+    renderQuality = 'high',
+    lowPowerMode = false,
+    resourceBoundaryEnabled = true
   }: RenderPageOptions): Promise<void> {
     if (!this.pdfDocument) return;
 
@@ -374,11 +414,16 @@ class PDFEngineInstance {
     const renderOperation = async () => {
       if (currentSession.cancelRequested || !this.pdfDocument) return;
 
+      const renderStartTime = performance.now();
       const page = await this.pdfDocument.getPage(pageNumber);
       if (currentSession.cancelRequested) return;
 
-      // Device Pixel Ratio scaling: Capped to 1.5 max in high mode to prevent 4x texture memory explosion on Retina/4K displays
-      const pixelRatio = renderQuality === 'high' ? Math.min(window.devicePixelRatio || 1, 1.5) : 1;
+      // Device Pixel Ratio scaling: governed by resource governor to prevent RAM / GPU lag
+      const pixelRatio = resourceGovernor.getEffectivePixelRatio(
+        renderQuality,
+        lowPowerMode,
+        resourceBoundaryEnabled
+      );
       const finalScale = scale * pixelRatio;
 
       const viewport = page.getViewport({
@@ -399,6 +444,11 @@ class PDFEngineInstance {
       canvas.style.width = `${displayViewport.width}px`;
       canvas.style.height = `${displayViewport.height}px`;
 
+      // Register canvas footprint with Resource Governor
+      const regId = `cvs-${pageNumber}-${Date.now()}`;
+      this.canvasRegistrationIds.set(canvas, regId);
+      resourceGovernor.registerCanvas(regId, viewport.width, viewport.height, pageNumber);
+
       // Fill clean background
       ctx.fillStyle = '#FFFFFF';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -418,6 +468,8 @@ class PDFEngineInstance {
           console.warn(`Page ${pageNumber} render notice:`, err?.message || err);
         }
       } finally {
+        const renderDuration = performance.now() - renderStartTime;
+        resourceGovernor.recordRenderDuration(renderDuration);
         // Free internal operator lists and glyph caches in PDF.js for this page
         try {
           page.cleanup();
@@ -427,8 +479,43 @@ class PDFEngineInstance {
       }
     };
 
-    currentSession.renderPromise = renderOperation();
-    await currentSession.renderPromise;
+    // Enforce Concurrency Boundary: queue render if max concurrent renders are already in progress
+    const concurrencyLimit = resourceGovernor.getMaxConcurrency(lowPowerMode, resourceBoundaryEnabled);
+    if (this.activeRenderCount >= concurrencyLimit) {
+      currentSession.renderPromise = new Promise<void>((resolve) => {
+        const queueItem = {
+          canvas,
+          pageNumber,
+          isCancelled: false,
+          execute: async () => {
+            if (queueItem.isCancelled || currentSession.cancelRequested) {
+              resolve();
+              return;
+            }
+            try {
+              await renderOperation();
+            } finally {
+              resolve();
+            }
+          },
+          cancel: () => {
+            queueItem.isCancelled = true;
+            resolve();
+          }
+        };
+        this.renderQueue.push(queueItem);
+      });
+      await currentSession.renderPromise;
+    } else {
+      this.activeRenderCount++;
+      currentSession.renderPromise = renderOperation();
+      try {
+        await currentSession.renderPromise;
+      } finally {
+        this.activeRenderCount = Math.max(0, this.activeRenderCount - 1);
+        this.processRenderQueue(lowPowerMode, resourceBoundaryEnabled);
+      }
+    }
   }
 
   /**
@@ -436,6 +523,23 @@ class PDFEngineInstance {
    */
   cleanupPageCanvas(canvas: HTMLCanvasElement | null, _pageNumber: number) {
     if (!canvas) return;
+
+    // Discard from queued renders if waiting in queue
+    this.renderQueue = this.renderQueue.filter((item) => {
+      if (item.canvas === canvas) {
+        item.isCancelled = true;
+        item.cancel();
+        return false;
+      }
+      return true;
+    });
+
+    // Unregister canvas memory footprint from Governor
+    const regId = this.canvasRegistrationIds.get(canvas);
+    if (regId) {
+      resourceGovernor.unregisterCanvas(regId);
+      this.canvasRegistrationIds.delete(canvas);
+    }
 
     if (this.canvasSessions.has(canvas)) {
       const session = this.canvasSessions.get(canvas)!;

@@ -28,6 +28,17 @@ export const SearchModal: React.FC<SearchModalProps> = ({
     setSelectedIndex(0);
   }, [searchMatches]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleGlobalKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKey);
+    return () => window.removeEventListener('keydown', handleGlobalKey);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

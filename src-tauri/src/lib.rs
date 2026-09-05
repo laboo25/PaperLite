@@ -161,45 +161,80 @@ const PDF_ICON_BYTES: &[u8] = include_bytes!("../icons/pdf-icon.ico");
 fn ensure_windows_pdf_icon_association() {
     let mut resolved_icon_path: Option<String> = None;
 
-    // 1. Write embedded pdf-icon.ico to %LOCALAPPDATA%\PaperLite\icons\pdf-icon.ico
-    if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
-        let app_icon_dir = Path::new(&local_appdata).join("PaperLite").join("icons");
-        if fs::create_dir_all(&app_icon_dir).is_ok() {
-            let icon_file = app_icon_dir.join("pdf-icon.ico");
-            if fs::write(&icon_file, PDF_ICON_BYTES).is_ok() {
-                resolved_icon_path = Some(icon_file.to_string_lossy().to_string());
-            }
-        }
-    }
-
-    // 2. Also write next to current executable if accessible (<exe_dir>\icons\pdf-icon.ico)
+    // 1. Check if pdf-icon.ico is installed next to the executable (<exe_dir>\icons\pdf-icon.ico or <exe_dir>\pdf-icon.ico)
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(parent) = exe_path.parent() {
             let exe_icon_dir = parent.join("icons");
             let _ = fs::create_dir_all(&exe_icon_dir);
             let exe_icon_file = exe_icon_dir.join("pdf-icon.ico");
-            let _ = fs::write(&exe_icon_file, PDF_ICON_BYTES);
-            let _ = fs::write(parent.join("pdf-icon.ico"), PDF_ICON_BYTES);
+            let exe_root_file = parent.join("pdf-icon.ico");
 
-            if resolved_icon_path.is_none() && exe_icon_file.exists() {
+            // Write embedded icon if not yet present or writable
+            let _ = fs::write(&exe_icon_file, PDF_ICON_BYTES);
+            let _ = fs::write(&exe_root_file, PDF_ICON_BYTES);
+
+            if exe_icon_file.exists() {
                 resolved_icon_path = Some(exe_icon_file.to_string_lossy().to_string());
+            } else if exe_root_file.exists() {
+                resolved_icon_path = Some(exe_root_file.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    // 2. Also write embedded pdf-icon.ico to %LOCALAPPDATA%\PaperLite\icons\pdf-icon.ico
+    // This is always writable by current user without Administrator / UAC prompts
+    if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
+        let app_icon_dir = Path::new(&local_appdata).join("PaperLite").join("icons");
+        if fs::create_dir_all(&app_icon_dir).is_ok() {
+            let icon_file = app_icon_dir.join("pdf-icon.ico");
+            let _ = fs::write(&icon_file, PDF_ICON_BYTES);
+            if resolved_icon_path.is_none() && icon_file.exists() {
+                resolved_icon_path = Some(icon_file.to_string_lossy().to_string());
             }
         }
     }
 
     let final_icon_path = resolved_icon_path.unwrap_or_else(|| "icons\\pdf-icon.ico".to_string());
-    let icon_reg_val = format!("{},0", final_icon_path);
+    // In Windows Registry DefaultIcon, paths containing spaces MUST be wrapped in double quotes
+    // so that Windows File Explorer does not fail to parse the path and fallback to icon.ico
+    let quoted_icon_val = format!("\"{}\"", final_icon_path);
 
-    // 3. Register DefaultIcon in HKCU\Software\Classes (no admin rights needed)
-    let reg_entries: [(&str, &str, &str); 5] = [
+    let exe_path_str = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "PaperLite PDF Reader.exe".to_string());
+    let open_command = format!("\"{}\" \"%1\"", exe_path_str);
+
+    // 3. Register in HKCU\Software\Classes (user-level, no admin rights required)
+    let hkcu_entries: [(&str, &str, &str); 17] = [
+        // .pdf extension association
+        ("HKCU\\Software\\Classes\\.pdf", "", "PaperLite.PDF"),
+        ("HKCU\\Software\\Classes\\.pdf", "Content Type", "application/pdf"),
+        ("HKCU\\Software\\Classes\\.pdf", "PerceivedType", "document"),
+        ("HKCU\\Software\\Classes\\.pdf\\DefaultIcon", "", &quoted_icon_val),
+        ("HKCU\\Software\\Classes\\.pdf\\OpenWithProgids", "PaperLite.PDF", ""),
+        ("HKCU\\Software\\Classes\\.pdf\\OpenWithProgids", "com.paperlite.pdfreader.pdf", ""),
+
+        // SystemFileAssociations fallback
+        ("HKCU\\Software\\Classes\\SystemFileAssociations\\.pdf\\DefaultIcon", "", &quoted_icon_val),
+
+        // PaperLite.PDF ProgID
         ("HKCU\\Software\\Classes\\PaperLite.PDF", "", "PDF Document"),
-        ("HKCU\\Software\\Classes\\PaperLite.PDF\\DefaultIcon", "", &icon_reg_val),
+        ("HKCU\\Software\\Classes\\PaperLite.PDF\\DefaultIcon", "", &quoted_icon_val),
+        ("HKCU\\Software\\Classes\\PaperLite.PDF\\shell\\open\\command", "", &open_command),
+        ("HKCU\\Software\\Classes\\PaperLite.PDF\\shell\\open", "FriendlyAppName", "PaperLite PDF Reader"),
+
+        // com.paperlite.pdfreader.pdf ProgID (Tauri default bundle ID override)
         ("HKCU\\Software\\Classes\\com.paperlite.pdfreader.pdf", "", "PDF Document"),
-        ("HKCU\\Software\\Classes\\com.paperlite.pdfreader.pdf\\DefaultIcon", "", &icon_reg_val),
-        ("HKCU\\Software\\Classes\\Applications\\PaperLite PDF Reader.exe\\DefaultIcon", "", &icon_reg_val),
+        ("HKCU\\Software\\Classes\\com.paperlite.pdfreader.pdf\\DefaultIcon", "", &quoted_icon_val),
+        ("HKCU\\Software\\Classes\\com.paperlite.pdfreader.pdf\\shell\\open\\command", "", &open_command),
+        ("HKCU\\Software\\Classes\\com.paperlite.pdfreader.pdf\\shell\\open", "FriendlyAppName", "PaperLite PDF Reader"),
+
+        // Applications registration
+        ("HKCU\\Software\\Classes\\Applications\\PaperLite PDF Reader.exe\\DefaultIcon", "", &quoted_icon_val),
+        ("HKCU\\Software\\Classes\\Applications\\PaperLite PDF Reader.exe\\SupportedTypes", ".pdf", ""),
     ];
 
-    for (key, val_name, val) in reg_entries {
+    for (key, val_name, val) in hkcu_entries {
         let mut cmd = std::process::Command::new("reg");
         cmd.arg("add").arg(key);
         if val_name.is_empty() {
@@ -211,14 +246,40 @@ fn ensure_windows_pdf_icon_association() {
         let _ = cmd.output();
     }
 
-    // 4. Notify Windows Explorer shell to refresh all cached icons immediately
+    // Also attempt HKCR registration (succeeds if running with elevated / installer permissions)
+    let hkcr_entries: [(&str, &str, &str); 8] = [
+        ("HKCR\\.pdf", "", "PaperLite.PDF"),
+        ("HKCR\\.pdf\\DefaultIcon", "", &quoted_icon_val),
+        ("HKCR\\SystemFileAssociations\\.pdf\\DefaultIcon", "", &quoted_icon_val),
+        ("HKCR\\PaperLite.PDF\\DefaultIcon", "", &quoted_icon_val),
+        ("HKCR\\PaperLite.PDF\\shell\\open\\command", "", &open_command),
+        ("HKCR\\com.paperlite.pdfreader.pdf\\DefaultIcon", "", &quoted_icon_val),
+        ("HKCR\\com.paperlite.pdfreader.pdf\\shell\\open\\command", "", &open_command),
+        ("HKCR\\Applications\\PaperLite PDF Reader.exe\\DefaultIcon", "", &quoted_icon_val),
+    ];
+
+    for (key, val_name, val) in hkcr_entries {
+        let mut cmd = std::process::Command::new("reg");
+        cmd.arg("add").arg(key);
+        if val_name.is_empty() {
+            cmd.arg("/ve");
+        } else {
+            cmd.arg("/v").arg(val_name);
+        }
+        cmd.arg("/t").arg("REG_SZ").arg("/d").arg(val).arg("/f");
+        let _ = cmd.output();
+    }
+
+    // 4. Force Windows Explorer Shell to rebuild and reload the icon cache immediately
     let _ = std::process::Command::new("powershell")
         .args([
             "-WindowStyle", "Hidden",
             "-Command",
             "$c = '[DllImport(\"shell32.dll\")] public static extern void SHChangeNotify(int e, int f, IntPtr a, IntPtr b);'; \
              $t = Add-Type -MemberDefinition $c -Name 'S' -Namespace 'W' -PassThru; \
-             $t::SHChangeNotify(0x08000000, 0, [IntPtr]::Zero, [IntPtr]::Zero)"
+             $t::SHChangeNotify(0x08000000, 0x1000, [IntPtr]::Zero, [IntPtr]::Zero); \
+             Start-Process -FilePath 'ie4uinit.exe' -ArgumentList '-show' -ErrorAction SilentlyContinue; \
+             Start-Process -FilePath 'ie4uinit.exe' -ArgumentList '-ClearIconCache' -ErrorAction SilentlyContinue"
         ])
         .output();
 }

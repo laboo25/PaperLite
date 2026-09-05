@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import {
   Layers,
   ListTree,
@@ -37,8 +37,79 @@ interface SidebarProps {
   onSearchQueryChange: (query: string) => void;
   onDeleteBookmark: (pageNumber: number) => void;
   onDeleteAnnotation: (annotationId: string) => void;
+  onRequestThumbnail?: (pageNumber: number) => void;
   onClose: () => void;
 }
+
+interface ThumbnailCardProps {
+  pageNum: number;
+  isSelected: boolean;
+  thumbUrl?: string;
+  onSelect: (pageNum: number) => void;
+  onRequestThumbnail?: (pageNum: number) => void;
+}
+
+const ThumbnailCard: React.FC<ThumbnailCardProps> = ({
+  pageNum,
+  isSelected,
+  thumbUrl,
+  onSelect,
+  onRequestThumbnail
+}) => {
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (thumbUrl || !onRequestThumbnail) return;
+    const el = cardRef.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          onRequestThumbnail(pageNum);
+        }
+      },
+      { root: null, rootMargin: '120px 0px 120px 0px', threshold: 0.05 }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [pageNum, thumbUrl, onRequestThumbnail]);
+
+  return (
+    <div
+      ref={cardRef}
+      onClick={() => onSelect(pageNum)}
+      className={`group relative flex flex-col items-center p-1.5 rounded-xl cursor-pointer transition-all ${
+        isSelected
+          ? 'bg-blue-500/10 ring-2 ring-blue-500 shadow-xs'
+          : 'hover:bg-stone-200/50'
+      }`}
+    >
+      <div className="w-full aspect-[3/4] bg-white rounded-lg border border-stone-200/80 shadow-xs overflow-hidden flex items-center justify-center relative">
+        {thumbUrl ? (
+          <img
+            src={thumbUrl}
+            alt={`Page ${pageNum}`}
+            className="w-full h-full object-contain"
+            loading="lazy"
+          />
+        ) : (
+          <div className="flex flex-col items-center gap-1.5">
+            <PDFDocIcon size={24} className="opacity-70" />
+            <span className="text-[10px] font-mono text-stone-400">Page {pageNum}</span>
+          </div>
+        )}
+      </div>
+      <span
+        className={`mt-1.5 text-xs font-mono font-medium ${
+          isSelected ? 'text-blue-600 font-bold' : 'text-stone-500 group-hover:text-stone-800'
+        }`}
+      >
+        {pageNum}
+      </span>
+    </div>
+  );
+};
 
 export const Sidebar: React.FC<SidebarProps> = ({
   isOpen,
@@ -57,9 +128,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSearchQueryChange,
   onDeleteBookmark,
   onDeleteAnnotation,
+  onRequestThumbnail,
   onClose
 }) => {
   const [expandedOutlineNodes, setExpandedOutlineNodes] = useState<Record<string, boolean>>({});
+  const [jumpInput, setJumpInput] = useState('');
 
   if (!isOpen) return null;
 
@@ -199,46 +272,51 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">
         {/* TAB 1: THUMBNAILS */}
         {activeTab === 'thumbnails' && (
-          <div className="grid grid-cols-2 gap-3 pb-8">
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => {
-              const isSelected = pageNum === currentPage;
-              const thumbUrl = thumbnails.get(pageNum);
-
-              return (
-                <div
-                  key={pageNum}
-                  onClick={() => onPageSelect(pageNum)}
-                  className={`group relative flex flex-col items-center p-1.5 rounded-xl cursor-pointer transition-all ${
-                    isSelected
-                      ? 'bg-blue-500/10 ring-2 ring-blue-500 shadow-xs'
-                      : 'hover:bg-stone-200/50'
-                  }`}
+          <div>
+            {totalPages > 15 && (
+              <div className="mb-3 p-2 rounded-xl bg-stone-200/60 border border-stone-300/40 flex items-center justify-between gap-2 text-xs">
+                <span className="text-stone-500 font-mono text-[11px] shrink-0">Jump to</span>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const target = parseInt(jumpInput, 10);
+                    if (!isNaN(target) && target >= 1 && target <= totalPages) {
+                      onPageSelect(target);
+                    }
+                  }}
+                  className="flex items-center gap-1.5 flex-1 justify-end"
                 >
-                  <div className="w-full aspect-[3/4] bg-white rounded-lg border border-stone-200/80 shadow-xs overflow-hidden flex items-center justify-center relative">
-                    {thumbUrl ? (
-                      <img
-                        src={thumbUrl}
-                        alt={`Page ${pageNum}`}
-                        className="w-full h-full object-contain"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div className="flex flex-col items-center gap-1.5">
-                        <PDFDocIcon size={24} className="opacity-70" />
-                        <span className="text-[10px] font-mono text-stone-400">Page {pageNum}</span>
-                      </div>
-                    )}
-                  </div>
-                  <span
-                    className={`mt-1.5 text-xs font-mono font-medium ${
-                      isSelected ? 'text-blue-600 font-bold' : 'text-stone-500 group-hover:text-stone-800'
-                    }`}
+                  <input
+                    type="number"
+                    min={1}
+                    max={totalPages}
+                    value={jumpInput}
+                    onChange={(e) => setJumpInput(e.target.value)}
+                    placeholder={String(currentPage)}
+                    className="w-14 px-2 py-0.5 text-center font-mono text-xs rounded-md bg-white border border-stone-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <span className="text-stone-400 font-mono text-[11px]">/ {totalPages}</span>
+                  <button
+                    type="submit"
+                    className="px-2 py-0.5 rounded-md bg-stone-800 text-white text-[11px] font-medium hover:bg-stone-700 transition-colors"
                   >
-                    {pageNum}
-                  </span>
-                </div>
-              );
-            })}
+                    Go
+                  </button>
+                </form>
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-3 pb-8">
+              {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
+                <ThumbnailCard
+                  key={pageNum}
+                  pageNum={pageNum}
+                  isSelected={pageNum === currentPage}
+                  thumbUrl={thumbnails.get(pageNum)}
+                  onSelect={onPageSelect}
+                  onRequestThumbnail={onRequestThumbnail}
+                />
+              ))}
+            </div>
           </div>
         )}
 

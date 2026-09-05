@@ -354,7 +354,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         isDragging ? 'cursor-move' : 'cursor-default active:cursor-move'
       }`}
       style={{ WebkitAppRegion: 'drag' } as any}
-      title="Click and hold to move window • Double-click to maximize"
     >
       {/* Left Section: Home Page Button */}
       <div
@@ -366,7 +365,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         <button
           id="btn-home-tab"
           onClick={onToggleHome}
-          title="Home & Document Workspace (Cmd+H)"
+          aria-label="Home & Document Workspace"
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer ${
             isHomeActive
               ? 'bg-blue-600 text-white shadow-xs font-semibold'
@@ -398,7 +397,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
             style={{ WebkitAppRegion: 'no-drag' } as any}
             onClick={() => handleScroll('left')}
             className="absolute left-0 top-1/2 -translate-y-1/2 z-20 w-5 h-7 bg-stone-100/90 hover:bg-white shadow-xs rounded-r-lg flex items-center justify-center text-stone-600 hover:text-stone-900 border-r border-stone-300/60 transition-colors cursor-pointer"
-            title="Scroll tabs left"
+            aria-label="Scroll tabs left"
           >
             <ChevronLeft className="w-3 h-3" />
           </button>
@@ -451,7 +450,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
                 onContextMenu={(e) => handleTabContextMenu(e, tab, index)}
                 onAuxClick={(e) => handleTabAuxClick(e, tab.id)}
                 onClick={() => onSelectTab(tab.id)}
-                title={`${tab.doc.name} (Page ${tab.currentPage} of ${tab.totalPages}) • Drag to change position • Right-click for options`}
+                aria-label={tab.doc.name}
                 className={`group relative flex items-center gap-1.5 h-7.5 min-w-[70px] sm:min-w-[95px] md:min-w-[130px] max-w-[210px] flex-1 sm:flex-initial px-2 rounded-xl text-xs transition-all cursor-pointer select-none border ${
                   isBeingDragged
                     ? 'opacity-40 border-dashed border-blue-400 bg-blue-50/60 scale-95 shadow-inner ring-1 ring-blue-300'
@@ -489,7 +488,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
                 {/* Unsaved Edits Indicator Dot */}
                 {tab.isDirty && (
                   <span
-                    title="Unsaved changes (Ctrl+S)"
+                    aria-label="Unsaved changes"
                     className={`w-1.5 h-1.5 rounded-full shrink-0 animate-pulse ${
                       isActive ? 'bg-amber-300' : 'bg-amber-500'
                     }`}
@@ -511,7 +510,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({
                         e.preventDefault();
                         onMoveTab(index, index - 1);
                       }}
-                      title="Move tab left (Ctrl+Shift+Left)"
                       aria-label="Move tab left"
                       className={`w-3.5 h-4 rounded flex items-center justify-center transition-colors cursor-pointer ${
                         index === 0
@@ -533,7 +531,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({
                         e.preventDefault();
                         onMoveTab(index, index + 1);
                       }}
-                      title="Move tab right (Ctrl+Shift+Right)"
                       aria-label="Move tab right"
                       className={`w-3.5 h-4 rounded flex items-center justify-center transition-colors cursor-pointer ${
                         index === tabs.length - 1
@@ -557,7 +554,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({
                     e.preventDefault();
                     onCloseTab(tab.id, e);
                   }}
-                  title="Close Tab (Ctrl+W • Middle Click)"
                   aria-label="Close Tab"
                   className={`w-4 h-4 rounded-lg flex items-center justify-center shrink-0 transition-colors cursor-pointer ${
                     isActive
@@ -578,7 +574,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({
             data-tauri-drag-region="false"
             style={{ WebkitAppRegion: 'no-drag' } as any}
             onClick={onNewTab}
-            title="Open New PDF in New Tab (Cmd+T / Cmd+O)"
             aria-label="New Tab"
             className="w-7 h-7 flex items-center justify-center rounded-xl bg-stone-200/40 hover:bg-white hover:shadow-2xs text-stone-600 hover:text-stone-900 border border-stone-300/40 hover:border-stone-300 active:bg-stone-300 transition-all shrink-0 cursor-pointer ml-0.5"
           >
@@ -593,7 +588,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           className={`flex-1 h-full min-w-[28px] flex items-center justify-center ${
             isDragging ? 'cursor-move' : 'cursor-default active:cursor-move'
           }`}
-          title="Click and hold to move window • Double-click to maximize"
         >
           {/* Subtle drag handle indicator when window is small */}
           <div className="w-6 h-1 rounded-full bg-stone-300/40 hover:bg-stone-400/50 transition-colors" />
@@ -607,7 +601,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
             style={{ WebkitAppRegion: 'no-drag' } as any}
             onClick={() => handleScroll('right')}
             className="absolute right-0 top-1/2 -translate-y-1/2 z-20 w-5 h-7 bg-stone-100/90 hover:bg-white shadow-xs rounded-l-lg flex items-center justify-center text-stone-600 hover:text-stone-900 border-l border-stone-300/60 transition-colors cursor-pointer"
-            title="Scroll tabs right"
+            aria-label="Scroll tabs right"
           >
             <ChevronRight className="w-3 h-3" />
           </button>
@@ -624,7 +618,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         <button
           id="window-control-minimize"
           onClick={handleMinimize}
-          title="Minimize Window"
           aria-label="Minimize Window"
           className="w-6.5 h-6.5 flex items-center justify-center text-stone-600 hover:text-stone-900 hover:bg-stone-200/80 active:bg-stone-300 rounded-md transition-colors cursor-pointer"
         >
@@ -634,7 +627,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         <button
           id="window-control-maximize"
           onClick={handleMaximize}
-          title={isMaximized ? 'Restore Window' : 'Maximize Window'}
           aria-label={isMaximized ? 'Restore Window' : 'Maximize Window'}
           className="w-6.5 h-6.5 flex items-center justify-center text-stone-600 hover:text-stone-900 hover:bg-stone-200/80 active:bg-stone-300 rounded-md transition-colors cursor-pointer"
         >
@@ -648,7 +640,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         <button
           id="window-control-close"
           onClick={handleClose}
-          title="Close Application"
           aria-label="Close Application"
           className="w-6.5 h-6.5 flex items-center justify-center text-stone-600 hover:text-white hover:bg-rose-500 active:bg-rose-600 rounded-md transition-colors cursor-pointer"
         >

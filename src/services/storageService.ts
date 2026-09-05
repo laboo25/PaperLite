@@ -23,7 +23,9 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   smoothScrolling: true,
   renderQuality: 'high',
   autoSaveProgress: true,
-  lowPowerMode: false
+  lowPowerMode: false,
+  resourceBoundaryEnabled: true,
+  autoPurgeCacheOnTabClose: true
 };
 
 export class StorageService {
@@ -120,19 +122,21 @@ export class StorageService {
   }
 
   /**
-   * Persists binary PDF data in persistent multi-tier storage
+   * Persists binary PDF data in persistent multi-tier storage.
+   * If `hasLocalPath` is true, data is kept ONLY in memory and NOT written to disk/AppData.
    */
   async saveDocumentData(
     docId: string,
     fingerprint: string,
     data: ArrayBuffer,
-    fileName?: string
+    fileName?: string,
+    options?: { hasLocalPath?: boolean; isTemporary?: boolean }
   ): Promise<void> {
-    await binaryStorage.save(docId, fingerprint, data, fileName);
+    await binaryStorage.save(docId, fingerprint, data, fileName, options);
   }
 
   /**
-   * Retrieves binary PDF data from persistent storage
+   * Retrieves binary PDF data from storage
    */
   async getDocumentData(
     docId?: string | null,
@@ -151,6 +155,27 @@ export class StorageService {
     fileName?: string
   ): Promise<void> {
     await binaryStorage.delete(docId, fingerprint, fileName);
+  }
+
+  /**
+   * Purges orphaned temporary binaries that no longer belong to open tabs or saved documents
+   */
+  async purgeOrphanedTemporaryData(activeDocIds: string[]): Promise<number> {
+    return await binaryStorage.purgeOrphanedTemporaryBlobs(activeDocIds);
+  }
+
+  /**
+   * Wipes all cached binary blobs from storage
+   */
+  async clearAllCachedBinaries(): Promise<void> {
+    await binaryStorage.clearAllTemporaryCache();
+  }
+
+  /**
+   * Returns current storage consumption in AppData / IndexedDB
+   */
+  async getStorageStats(): Promise<{ totalBytes: number; docCount: number }> {
+    return await binaryStorage.getStorageUsage();
   }
 
   getOpenTabs(): PDFDocumentInfo[] {

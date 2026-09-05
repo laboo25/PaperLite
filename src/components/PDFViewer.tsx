@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { PageCanvas } from './PageCanvas';
 import { AnnotationTool, PDFAnnotation, ReaderSettings } from '../types';
+import { pdfEngine } from '../services/pdfEngine';
+import { resourceGovernor } from '../services/resourceGovernor';
 import { HIGHLIGHT_COLORS } from './AnnotationToolbar';
 import {
   Highlighter,
@@ -11,8 +13,75 @@ import {
   Copy,
   Search,
   Check,
-  X
+  X,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
+
+interface PagePlaceholderProps {
+  pageNumber: number;
+  width: number;
+  height: number;
+  rotation?: number;
+  scale?: number;
+  onVisibleChange: (pageNumber: number, isVisible: boolean) => void;
+}
+
+const PagePlaceholder: React.FC<PagePlaceholderProps> = ({
+  pageNumber,
+  width,
+  height,
+  rotation = 0,
+  scale = 1,
+  onVisibleChange
+}) => {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries[0].isIntersecting;
+        onVisibleChange(pageNumber, visible);
+      },
+      {
+        root: null,
+        rootMargin: '350px 0px 350px 0px',
+        threshold: 0.01
+      }
+    );
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      onVisibleChange(pageNumber, false);
+    };
+  }, [pageNumber, onVisibleChange]);
+
+  // Use individual measured page dimensions if cached in engine for 100% precision
+  const cachedDim = pdfEngine.getCachedPageDimension(pageNumber, rotation);
+  const finalWidth = cachedDim ? cachedDim.width * scale : width;
+  const finalHeight = cachedDim ? cachedDim.height * scale : height;
+
+  return (
+    <div
+      ref={ref}
+      id={`page-container-${pageNumber}`}
+      data-page-number={pageNumber}
+      style={{
+        width: `${finalWidth}px`,
+        height: `${finalHeight}px`,
+        maxWidth: '100%'
+      }}
+      className="relative flex flex-col items-center justify-center bg-white/70 rounded-xl border border-stone-200/60 shadow-xs text-stone-400 select-none"
+    >
+      <div className="flex flex-col items-center gap-1.5 p-4 rounded-xl bg-stone-100/60 border border-stone-200/50">
+        <span className="text-xs font-mono font-bold text-stone-500">Page {pageNumber}</span>
+        <span className="text-[10px] text-stone-400 font-sans">Scroll to view</span>
+      </div>
+    </div>
+  );
+};
 
 interface PDFViewerProps {
   documentId?: string;
@@ -57,12 +126,38 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
   const [showEditInput, setShowEditInput] = useState(false);
   const [editText, setEditText] = useState('');
 
+  // Track default page dimensions for virtualization placeholder sizing
+  const [estimatedDim, setEstimatedDim] = useState<{ width: number; height: number }>({ width: 595, height: 842 });
+
+  useEffect(() => {
+    let isMounted = true;
+    pdfEngine.getPageDimension(1, settings.rotation).then((dim) => {
+      if (isMounted && dim) {
+        setEstimatedDim({ width: dim.width, height: dim.height });
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [documentId, settings.rotation]);
+
   // Track visible pages to sync active currentPage in continuous mode
   const visiblePagesMap = useRef<Map<number, boolean>>(new Map());
+  const lastScrolledPageRef = useRef<number>(currentPage);
+
+  // Clear visible tracking when document changes
+  useEffect(() => {
+    visiblePagesMap.current.clear();
+  }, [documentId]);
 
   const handleVisibleChange = useCallback(
     (pageNumber: number, isVisible: boolean) => {
-      visiblePagesMap.current.set(pageNumber, isVisible);
+      if (isVisible) {
+        visiblePagesMap.current.set(pageNumber, true);
+      } else {
+        visiblePagesMap.current.delete(pageNumber);
+      }
+
       if (isVisible && settings.viewMode === 'continuous') {
         let firstVisible = totalPages;
         visiblePagesMap.current.forEach((vis, p) => {
@@ -78,7 +173,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
     [currentPage, totalPages, settings.viewMode, onPageChange]
   );
 
-  // Smooth scroll to page when currentPage changes in continuous mode
+  // Scroll to page when currentPage changes in continuous mode
   useEffect(() => {
     if (settings.viewMode === 'continuous') {
       const el = document.getElementById(`page-container-${currentPage}`);
@@ -89,10 +184,12 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
 
         // Only scroll if outside viewing bounds
         if (rect.top < containerRect.top || rect.bottom > containerRect.bottom + 200) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          const isFarJump = Math.abs((lastScrolledPageRef.current || 1) - currentPage) > 3;
+          el.scrollIntoView({ behavior: isFarJump ? 'auto' : 'smooth', block: 'start' });
         }
       }
     }
+    lastScrolledPageRef.current = currentPage;
   }, [currentPage, settings.viewMode]);
 
   // Handle native text selection and show custom context menu
@@ -384,6 +481,8 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
             rotation={settings.rotation}
             theme={settings.theme}
             renderQuality={settings.renderQuality}
+            lowPowerMode={settings.lowPowerMode}
+            resourceBoundaryEnabled={settings.resourceBoundaryEnabled}
             activeTool={activeTool}
             activeColor={activeColor}
             annotations={annotations}
@@ -407,6 +506,8 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
             rotation={settings.rotation}
             theme={settings.theme}
             renderQuality={settings.renderQuality}
+            lowPowerMode={settings.lowPowerMode}
+            resourceBoundaryEnabled={settings.resourceBoundaryEnabled}
             activeTool={activeTool}
             activeColor={activeColor}
             annotations={annotations}
@@ -421,6 +522,8 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
               rotation={settings.rotation}
               theme={settings.theme}
               renderQuality={settings.renderQuality}
+              lowPowerMode={settings.lowPowerMode}
+              resourceBoundaryEnabled={settings.resourceBoundaryEnabled}
               activeTool={activeTool}
               activeColor={activeColor}
               annotations={annotations}
@@ -432,25 +535,58 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
       );
     }
 
-    // Default: Continuous scrolling mode
+    // Default: Continuous scrolling mode with memory-efficient windowed virtualization
+    const isRotated90 = settings.rotation % 180 !== 0;
+    const baseWidth = isRotated90 ? estimatedDim.height : estimatedDim.width;
+    const baseHeight = isRotated90 ? estimatedDim.width : estimatedDim.height;
+    const displayWidth = baseWidth * settings.zoom;
+    const displayHeight = baseHeight * settings.zoom;
+
+    // Buffer window around current page (governed dynamically by resource governor to eliminate PC lag)
+    const windowBuffer = resourceGovernor.getWindowBuffer(
+      totalPages,
+      settings.lowPowerMode,
+      settings.resourceBoundaryEnabled
+    );
+    const renderStart = Math.max(1, currentPage - windowBuffer);
+    const renderEnd = Math.min(totalPages, currentPage + windowBuffer);
+
     return (
       <div className="py-3 space-y-3 flex flex-col items-center">
-        {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
-          <PageCanvas
-            key={`${documentId || 'doc'}-page-${pageNum}`}
-            pageNumber={pageNum}
-            scale={settings.zoom}
-            rotation={settings.rotation}
-            theme={settings.theme}
-            renderQuality={settings.renderQuality}
-            activeTool={activeTool}
-            activeColor={activeColor}
-            annotations={annotations}
-            onAddAnnotation={onAddAnnotation}
-            onDeleteAnnotation={onDeleteAnnotation}
-            onVisibleChange={handleVisibleChange}
-          />
-        ))}
+        {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => {
+          const isWithinWindow = pageNum >= renderStart && pageNum <= renderEnd;
+          if (isWithinWindow || totalPages <= 4) {
+            return (
+              <PageCanvas
+                key={`${documentId || 'doc'}-page-${pageNum}`}
+                pageNumber={pageNum}
+                scale={settings.zoom}
+                rotation={settings.rotation}
+                theme={settings.theme}
+                renderQuality={settings.renderQuality}
+                lowPowerMode={settings.lowPowerMode}
+                resourceBoundaryEnabled={settings.resourceBoundaryEnabled}
+                activeTool={activeTool}
+                activeColor={activeColor}
+                annotations={annotations}
+                onAddAnnotation={onAddAnnotation}
+                onDeleteAnnotation={onDeleteAnnotation}
+                onVisibleChange={handleVisibleChange}
+              />
+            );
+          }
+          return (
+            <PagePlaceholder
+              key={`${documentId || 'doc'}-placeholder-${pageNum}`}
+              pageNumber={pageNum}
+              width={displayWidth}
+              height={displayHeight}
+              rotation={settings.rotation}
+              scale={settings.zoom}
+              onVisibleChange={handleVisibleChange}
+            />
+          );
+        })}
       </div>
     );
   };
@@ -471,6 +607,38 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({
       }`}
     >
       {renderPagesContent()}
+
+      {/* Floating Minimalist Reader Navigation HUD for Large Documents */}
+      {totalPages > 1 && (
+        <div
+          id="reader-floating-nav-hud"
+          className="fixed bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-stone-900/85 backdrop-blur-md text-white shadow-xl border border-white/15 text-xs select-none transition-all duration-200 hover:opacity-100 opacity-80"
+        >
+          <button
+            type="button"
+            onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+            disabled={currentPage <= 1}
+            title="Previous Page"
+            className="p-1 rounded-full hover:bg-white/20 disabled:opacity-30 transition-colors cursor-pointer"
+          >
+            <ChevronLeft className="w-3.5 h-3.5" />
+          </button>
+
+          <span className="font-mono text-[11px] font-medium px-1 tracking-tight">
+            {currentPage} <span className="opacity-45">/</span> {totalPages}
+          </span>
+
+          <button
+            type="button"
+            onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
+            disabled={currentPage >= totalPages}
+            title="Next Page"
+            className="p-1 rounded-full hover:bg-white/20 disabled:opacity-30 transition-colors cursor-pointer"
+          >
+            <ChevronRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Sleek Floating Custom Context Menu for Selected Text */}
       {selectedTextPopup && (

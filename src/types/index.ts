@@ -75,6 +75,21 @@ export interface SearchMatch {
   snippet: string;
 }
 
+export type ResourcePressureLevel = 'optimal' | 'moderate' | 'high' | 'critical';
+
+export interface ResourceGovernorMetrics {
+  usedHeapMB: number | null;
+  heapLimitMB: number | null;
+  memoryPressure: ResourcePressureLevel;
+  cpuPressure: ResourcePressureLevel;
+  avgRenderLatencyMs: number;
+  activeCanvasCount: number;
+  totalActiveMegaPixels: number;
+  isThrottlingActive: boolean;
+  hardwareCores: number;
+  deviceMemoryGB: number | null;
+}
+
 export interface ReaderSettings {
   theme: ReaderTheme;
   viewMode: ViewMode;
@@ -87,4 +102,6 @@ export interface ReaderSettings {
   renderQuality: 'normal' | 'high';
   autoSaveProgress: boolean;
   lowPowerMode?: boolean;
+  resourceBoundaryEnabled?: boolean;
+  autoPurgeCacheOnTabClose?: boolean;
 }

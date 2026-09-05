@@ -12,6 +12,8 @@ interface PageCanvasProps {
   activeTool: AnnotationTool;
   activeColor: string;
   annotations: PDFAnnotation[];
+  lowPowerMode?: boolean;
+  resourceBoundaryEnabled?: boolean;
   onAddAnnotation: (annotation: PDFAnnotation) => void;
   onDeleteAnnotation: (annotationId: string) => void;
   onVisibleChange?: (pageNumber: number, isVisible: boolean) => void;
@@ -26,6 +28,8 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
   activeTool,
   activeColor,
   annotations,
+  lowPowerMode,
+  resourceBoundaryEnabled,
   onAddAnnotation,
   onDeleteAnnotation,
   onVisibleChange
@@ -80,28 +84,33 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
     let cancelObj: { cancel: () => void; promise: Promise<void> } | null = null;
     let isCancelled = false;
 
-    pdfEngine
-      .renderTextLayer({
-        container: textContainer,
-        pageNumber,
-        scale,
-        rotation
-      })
-      .then((res) => {
-        if (isCancelled) {
-          res?.cancel();
-        } else {
-          cancelObj = res;
-        }
-      })
-      .catch((err) => {
-        if (!isCancelled) {
-          console.warn('Text layer render notice:', err);
-        }
-      });
+    // Small 70ms debounce so fast scrolling doesn't build text layers for pages scrolled past
+    const timer = setTimeout(() => {
+      if (isCancelled) return;
+      pdfEngine
+        .renderTextLayer({
+          container: textContainer,
+          pageNumber,
+          scale,
+          rotation
+        })
+        .then((res) => {
+          if (isCancelled) {
+            res?.cancel();
+          } else {
+            cancelObj = res;
+          }
+        })
+        .catch((err) => {
+          if (!isCancelled) {
+            console.warn('Text layer render notice:', err);
+          }
+        });
+    }, 70);
 
     return () => {
       isCancelled = true;
+      clearTimeout(timer);
       if (cancelObj) {
         cancelObj.cancel();
       }
@@ -136,6 +145,9 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
 
     return () => {
       observer.disconnect();
+      if (onVisibleChange) {
+        onVisibleChange(pageNumber, false);
+      }
     };
   }, [pageNumber, onVisibleChange]);
 
@@ -158,7 +170,9 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
         pageNumber,
         scale,
         rotation,
-        renderQuality
+        renderQuality,
+        lowPowerMode,
+        resourceBoundaryEnabled
       })
       .then(() => {
         if (!isCancelled) {
@@ -176,7 +190,7 @@ export const PageCanvas: React.FC<PageCanvasProps> = ({
       isCancelled = true;
       pdfEngine.cleanupPageCanvas(canvas, pageNumber);
     };
-  }, [pageNumber, scale, rotation, renderQuality, isVisible]);
+  }, [pageNumber, scale, rotation, renderQuality, isVisible, lowPowerMode, resourceBoundaryEnabled]);
 
   // Redraw Pen Ink Canvas
   useEffect(() => {

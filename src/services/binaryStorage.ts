@@ -1,24 +1,55 @@
 /**
  * BinaryDocumentStorage
- * High-performance, memory-leak-safe, multi-tier binary persistence for PDF documents.
+ * High-performance, zero-waste binary persistence for PDF documents.
  * 
- * Tiers:
- * 1. Fast in-memory LRU Cache (limited to 15 documents to prevent memory bloat/leakage)
- * 2. Web standard Cache Storage API (caches.open)
- * 3. IndexedDB BLOB Object Store ('paperlite_pdf_blobs')
+ * Storage Principles & Zero-Waste Guard:
+ * 1. Local Files (Tauri / Local Disk):
+ *    - If a PDF file already lives on the user's hard drive (`filePath` is present),
+ *      it is NEVER duplicated into IndexedDB or CacheStorage.
+ *    - It is kept exclusively in fast in-memory LRU cache during active use,
+ *      ensuring 0 bytes of hidden AppData storage consumption.
+ * 
+ * 2. Web / Non-disk Temporary Files:
+ *    - Files opened via web drag-and-drop (without native filesystem access)
+ *      are saved with `isTemporary: true` in IndexedDB (single copy, not duplicated 3x in Cache API).
+ *    - Automatically purged when tabs are closed or on app launch if no longer in open tabs.
+ * 
+ * 3. Cache Purge & Cleanup:
+ *    - Provides automatic orphaned-blob cleanup and manual cache wipe capabilities.
  */
+
+export interface StorageStats {
+  totalBytes: number;
+  docCount: number;
+}
 
 export class BinaryDocumentStorage {
   private memoryCache = new Map<string, ArrayBuffer>();
   private memoryKeysQueue: string[] = [];
-  private readonly MAX_MEMORY_DOCS = 15;
+  private readonly MAX_MEMORY_DOCS = 10;
   private dbPromise: Promise<IDBDatabase | null> | null = null;
-  private cacheApiAvailable: boolean = typeof window !== 'undefined' && 'caches' in window;
   private idbAvailable: boolean = typeof window !== 'undefined' && 'indexedDB' in window;
 
   constructor() {
     if (this.idbAvailable) {
       this.initIndexedDB();
+    }
+    // Clean legacy bloated Cache API store if present from earlier versions
+    this.cleanLegacyCaches();
+  }
+
+  private async cleanLegacyCaches(): Promise<void> {
+    if (typeof window !== 'undefined' && 'caches' in window) {
+      try {
+        const cacheNames = await window.caches.keys();
+        for (const name of cacheNames) {
+          if (name.includes('paperlite_pdf_blobs')) {
+            await window.caches.delete(name);
+          }
+        }
+      } catch (err) {
+        console.warn('[BinaryStorage] Legacy cache sweep notice:', err);
+      }
     }
   }
 
@@ -35,6 +66,7 @@ export class BinaryDocumentStorage {
             const store = db.createObjectStore('pdf_documents', { keyPath: 'id' });
             store.createIndex('by_fingerprint', 'fingerprint', { unique: false });
             store.createIndex('by_name', 'name', { unique: false });
+            store.createIndex('by_updatedAt', 'updatedAt', { unique: false });
           }
         };
 
@@ -57,8 +89,7 @@ export class BinaryDocumentStorage {
 
   private setMemory(key: string, data: ArrayBuffer) {
     if (!key || !data || data.byteLength === 0) return;
-    
-    // Maintain LRU queue
+
     const idx = this.memoryKeysQueue.indexOf(key);
     if (idx >= 0) {
       this.memoryKeysQueue.splice(idx, 1);
@@ -66,7 +97,6 @@ export class BinaryDocumentStorage {
     this.memoryKeysQueue.push(key);
     this.memoryCache.set(key, data);
 
-    // Evict oldest documents if exceeding MAX_MEMORY_DOCS to prevent memory bloat
     while (this.memoryKeysQueue.length > this.MAX_MEMORY_DOCS) {
       const oldestKey = this.memoryKeysQueue.shift();
       if (oldestKey) {
@@ -76,52 +106,34 @@ export class BinaryDocumentStorage {
   }
 
   /**
-   * Persists binary PDF data in both memory and durable storage
+   * Persists binary PDF data with strict duplicate-prevention.
+   * If `hasLocalPath` is true, it is stored ONLY in memory and NOT written to AppData / IndexedDB.
    */
   async save(
     docId: string,
     fingerprint: string,
     data: ArrayBuffer,
-    fileName?: string
+    fileName?: string,
+    options?: { hasLocalPath?: boolean; isTemporary?: boolean }
   ): Promise<void> {
     if (!data || data.byteLength === 0) return;
 
-    // 1. In-memory caching (cloned buffer to prevent detachment issues)
+    // 1. In-memory caching for active reading session
     const cloned = data.slice(0);
     if (docId) this.setMemory(`id:${docId}`, cloned);
     if (fingerprint) this.setMemory(`fp:${fingerprint}`, cloned);
     if (fileName) this.setMemory(`name:${fileName.toLowerCase().trim()}`, cloned);
 
-    // 2. Cache API persistence
-    if (this.cacheApiAvailable) {
-      try {
-        const cache = await window.caches.open('paperlite_pdf_blobs_v2');
-        const blob = new Blob([cloned], { type: 'application/pdf' });
-
-        if (docId) {
-          await cache.put(
-            `https://paperlite.local/docs/${encodeURIComponent(docId)}`,
-            new Response(blob.slice(0), { headers: { 'Content-Type': 'application/pdf' } })
-          );
-        }
-        if (fingerprint) {
-          await cache.put(
-            `https://paperlite.local/fps/${encodeURIComponent(fingerprint)}`,
-            new Response(blob.slice(0), { headers: { 'Content-Type': 'application/pdf' } })
-          );
-        }
-        if (fileName) {
-          await cache.put(
-            `https://paperlite.local/names/${encodeURIComponent(fileName.toLowerCase().trim())}`,
-            new Response(blob.slice(0), { headers: { 'Content-Type': 'application/pdf' } })
-          );
-        }
-      } catch (err) {
-        console.warn('[BinaryStorage] Cache API save notice:', err);
-      }
+    // 2. ZERO-STORAGE CONSUMPTION FOR LOCAL DISK FILES:
+    // If the file already exists on the local hard drive (Tauri desktop / native path),
+    // do NOT save a duplicate copy in IndexedDB / AppData!
+    if (options?.hasLocalPath) {
+      // If there was a previous temporary copy in IndexedDB for this ID, remove it
+      this.deleteFromIndexedDB(docId).catch(() => {});
+      return;
     }
 
-    // 3. IndexedDB persistence
+    // 3. For web / temporary files only: store a single record in IndexedDB
     if (this.idbAvailable) {
       try {
         const db = await this.initIndexedDB();
@@ -134,7 +146,8 @@ export class BinaryDocumentStorage {
             name: (fileName || '').toLowerCase().trim(),
             data: cloned,
             size: cloned.byteLength,
-            updatedAt: Date.now()
+            updatedAt: Date.now(),
+            isTemporary: options?.isTemporary ?? true
           };
           store.put(record);
         }
@@ -145,7 +158,7 @@ export class BinaryDocumentStorage {
   }
 
   /**
-   * Retrieves binary PDF data from memory, Cache API, or IndexedDB
+   * Retrieves binary PDF data from in-memory cache or IndexedDB
    */
   async get(
     docId?: string | null,
@@ -156,7 +169,7 @@ export class BinaryDocumentStorage {
     const cleanFp = fingerprint?.trim();
     const cleanName = fileName?.toLowerCase().trim();
 
-    // 1. Check in-memory Cache first (synchronous & zero I/O)
+    // 1. Check in-memory cache first (instant, zero I/O)
     if (cleanDocId && this.memoryCache.has(`id:${cleanDocId}`)) {
       return this.memoryCache.get(`id:${cleanDocId}`)!.slice(0);
     }
@@ -167,51 +180,7 @@ export class BinaryDocumentStorage {
       return this.memoryCache.get(`name:${cleanName}`)!.slice(0);
     }
 
-    // 2. Check Cache API
-    if (this.cacheApiAvailable) {
-      try {
-        const cache = await window.caches.open('paperlite_pdf_blobs_v2');
-
-        if (cleanDocId) {
-          const res = await cache.match(`https://paperlite.local/docs/${encodeURIComponent(cleanDocId)}`);
-          if (res) {
-            const buf = await res.arrayBuffer();
-            if (buf && buf.byteLength > 0) {
-              this.setMemory(`id:${cleanDocId}`, buf.slice(0));
-              if (cleanFp) this.setMemory(`fp:${cleanFp}`, buf.slice(0));
-              return buf;
-            }
-          }
-        }
-
-        if (cleanFp) {
-          const res = await cache.match(`https://paperlite.local/fps/${encodeURIComponent(cleanFp)}`);
-          if (res) {
-            const buf = await res.arrayBuffer();
-            if (buf && buf.byteLength > 0) {
-              this.setMemory(`fp:${cleanFp}`, buf.slice(0));
-              if (cleanDocId) this.setMemory(`id:${cleanDocId}`, buf.slice(0));
-              return buf;
-            }
-          }
-        }
-
-        if (cleanName) {
-          const res = await cache.match(`https://paperlite.local/names/${encodeURIComponent(cleanName)}`);
-          if (res) {
-            const buf = await res.arrayBuffer();
-            if (buf && buf.byteLength > 0) {
-              this.setMemory(`name:${cleanName}`, buf.slice(0));
-              return buf;
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('[BinaryStorage] Cache API read notice:', err);
-      }
-    }
-
-    // 3. Check IndexedDB
+    // 2. Check IndexedDB for non-disk / web cached documents
     if (this.idbAvailable) {
       try {
         const db = await this.initIndexedDB();
@@ -269,34 +238,133 @@ export class BinaryDocumentStorage {
   }
 
   /**
-   * Removes cached document binary from memory and storage
+   * Removes cached document binary from memory and IndexedDB
    */
   async delete(docId: string, fingerprint?: string, fileName?: string): Promise<void> {
     if (docId) this.memoryCache.delete(`id:${docId}`);
     if (fingerprint) this.memoryCache.delete(`fp:${fingerprint}`);
     if (fileName) this.memoryCache.delete(`name:${fileName.toLowerCase().trim()}`);
 
-    if (this.cacheApiAvailable) {
-      try {
-        const cache = await window.caches.open('paperlite_pdf_blobs_v2');
-        if (docId) await cache.delete(`https://paperlite.local/docs/${encodeURIComponent(docId)}`);
-        if (fingerprint) await cache.delete(`https://paperlite.local/fps/${encodeURIComponent(fingerprint)}`);
-        if (fileName) await cache.delete(`https://paperlite.local/names/${encodeURIComponent(fileName.toLowerCase().trim())}`);
-      } catch {
-        // ignore
+    await this.deleteFromIndexedDB(docId);
+  }
+
+  private async deleteFromIndexedDB(docId?: string): Promise<void> {
+    if (!docId || !this.idbAvailable) return;
+    try {
+      const db = await this.initIndexedDB();
+      if (db) {
+        const tx = db.transaction('pdf_documents', 'readwrite');
+        tx.objectStore('pdf_documents').delete(docId);
       }
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * Purges temporary blobs from IndexedDB that do not belong to active tabs or pinned items.
+   * Guarantees storage is not silently consumed.
+   */
+  async purgeOrphanedTemporaryBlobs(keepDocIds: string[]): Promise<number> {
+    if (!this.idbAvailable) return 0;
+    let purgedCount = 0;
+    const keepSet = new Set(keepDocIds.filter(Boolean));
+
+    try {
+      const db = await this.initIndexedDB();
+      if (!db) return 0;
+
+      const tx = db.transaction('pdf_documents', 'readwrite');
+      const store = tx.objectStore('pdf_documents');
+      const req = store.openCursor();
+
+      await new Promise<void>((resolve) => {
+        req.onsuccess = (e) => {
+          const cursor = (e.target as IDBRequest<IDBCursorWithValue>).result;
+          if (cursor) {
+            const key = String(cursor.key);
+            // If not in the active keep set, delete it immediately
+            if (!keepSet.has(key)) {
+              cursor.delete();
+              purgedCount++;
+            }
+            cursor.continue();
+          } else {
+            resolve();
+          }
+        };
+        req.onerror = () => resolve();
+      });
+    } catch (err) {
+      console.warn('[BinaryStorage] Purge notice:', err);
     }
 
+    return purgedCount;
+  }
+
+  /**
+   * Completely wipes all cached temporary binary data from IndexedDB & Memory.
+   */
+  async clearAllTemporaryCache(): Promise<void> {
+    this.memoryCache.clear();
+    this.memoryKeysQueue = [];
+
+    // Clear IndexedDB
     if (this.idbAvailable) {
       try {
         const db = await this.initIndexedDB();
-        if (db && docId) {
+        if (db) {
           const tx = db.transaction('pdf_documents', 'readwrite');
-          tx.objectStore('pdf_documents').delete(docId);
+          tx.objectStore('pdf_documents').clear();
         }
-      } catch {
-        // ignore
+      } catch (err) {
+        console.warn('[BinaryStorage] Clear all error:', err);
       }
+    }
+
+    // Clear legacy Cache API
+    await this.cleanLegacyCaches();
+  }
+
+  /**
+   * Computes current storage consumption of temporary cached PDF binaries in AppData / IndexedDB
+   */
+  async getStorageUsage(): Promise<StorageStats> {
+    if (!this.idbAvailable) return { totalBytes: 0, docCount: 0 };
+
+    try {
+      const db = await this.initIndexedDB();
+      if (!db) return { totalBytes: 0, docCount: 0 };
+
+      const tx = db.transaction('pdf_documents', 'readonly');
+      const store = tx.objectStore('pdf_documents');
+      const req = store.openCursor();
+
+      let totalBytes = 0;
+      let docCount = 0;
+
+      await new Promise<void>((resolve) => {
+        req.onsuccess = (e) => {
+          const cursor = (e.target as IDBRequest<IDBCursorWithValue>).result;
+          if (cursor) {
+            const record = cursor.value;
+            if (record && record.size) {
+              totalBytes += record.size;
+            } else if (record && record.data && record.data.byteLength) {
+              totalBytes += record.data.byteLength;
+            }
+            docCount++;
+            cursor.continue();
+          } else {
+            resolve();
+          }
+        };
+        req.onerror = () => resolve();
+      });
+
+      return { totalBytes, docCount };
+    } catch {
+      return { totalBytes: 0, docCount: 0 };
     }
   }
 

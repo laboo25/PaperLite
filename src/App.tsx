@@ -90,6 +90,9 @@ export default function App() {
   const activeTabIdRef = useRef<string | null>(null);
   activeTabIdRef.current = activeTabId;
   const readerDragCounterRef = useRef<number>(0);
+  const isInitializedRef = useRef(false);
+  const handleUndoRef = useRef<() => void>(() => {});
+  const handleRedoRef = useRef<() => void>(() => {});
 
   // Helper Toast Triggers
   const addToast = useCallback(
@@ -169,12 +172,21 @@ export default function App() {
               }
             }
           });
+          // Background sweep orphaned temporary storage left behind by closed or crashed sessions
+          const openDocIds = uniqueDocs.map((d) => d.id);
+          storageService.purgeOrphanedTemporaryData(openDocIds).catch(() => {});
+
+          isInitializedRef.current = true;
           return;
         }
       }
 
+      // Sweep any orphaned temporary blobs if starting on Home page
+      storageService.purgeOrphanedTemporaryData([]).catch(() => {});
+
       // If no tabs were restored, default to showing Home page
       setIsHomeActive(true);
+      isInitializedRef.current = true;
     };
 
     initStartupDocument();
@@ -198,12 +210,9 @@ export default function App() {
 
   // Sync open tabs to storage so tabs are never removed until user explicitly removes them
   useEffect(() => {
-    if (tabs.length > 0) {
-      storageService.saveOpenTabs(tabs.map((t) => t.doc));
-    }
-    if (activeTabId) {
-      storageService.saveActiveTabId(activeTabId);
-    }
+    if (!isInitializedRef.current) return;
+    storageService.saveOpenTabs(tabs.map((t) => t.doc));
+    storageService.saveActiveTabId(activeTabId);
   }, [tabs, activeTabId]);
 
   // Save settings on update
@@ -298,7 +307,13 @@ export default function App() {
       setCurrentPage(validPage);
 
       // Persist binary data into durable multi-tier storage
-      storageService.saveDocumentData(tabId, fingerprint, data.slice(0), updatedInfo.name).catch((err) => {
+      // ZERO-DUPLICATE GUARD: If file already exists on local disk (path present),
+      // keep it ONLY in memory and do NOT write a duplicate 50MB-500MB copy to AppData / IndexedDB!
+      const hasLocalPath = Boolean(updatedInfo.path && updatedInfo.path.trim());
+      storageService.saveDocumentData(tabId, fingerprint, data.slice(0), updatedInfo.name, {
+        hasLocalPath,
+        isTemporary: !hasLocalPath
+      }).catch((err) => {
         console.warn('Failed to persist document binary:', err);
       });
 
@@ -362,8 +377,35 @@ export default function App() {
     }
   };
 
+  const pendingThumbnailRequests = useRef<Set<number>>(new Set());
+
+  const handleRequestThumbnail = useCallback(
+    async (pageNumber: number) => {
+      if (thumbnails.has(pageNumber) || pendingThumbnailRequests.current.has(pageNumber)) {
+        return;
+      }
+      pendingThumbnailRequests.current.add(pageNumber);
+      try {
+        const url = await pdfEngine.renderThumbnail(pageNumber, 140);
+        if (url) {
+          setThumbnails((prev) => {
+            const next = new Map(prev);
+            next.set(pageNumber, url);
+            return next;
+          });
+        }
+      } catch (err) {
+        console.warn(`Thumbnail request failed for page ${pageNumber}:`, err);
+      } finally {
+        pendingThumbnailRequests.current.delete(pageNumber);
+      }
+    },
+    [thumbnails]
+  );
+
   const generateInitialThumbnails = async (numPages: number, forTabId?: string) => {
-    const limit = Math.min(numPages, 16);
+    // Keep initial batch small on large documents for instant startup responsiveness
+    const limit = numPages > 50 ? 8 : Math.min(numPages, 16);
     const newThumbs = new Map<number, string>();
     for (let i = 1; i <= limit; i++) {
       try {
@@ -405,17 +447,31 @@ export default function App() {
       return;
     }
 
-    // 2. Fetch binary buffer from persistent multi-tier storage
+    // 2. If path is available on disk, read directly from local disk (zero AppData duplicate storage)
     let buffer: ArrayBuffer | null = null;
-    try {
-      buffer = await storageService.getDocumentData(docInfo.id, docInfo.fingerprint, docInfo.name);
-    } catch (e) {
-      console.warn('Error reading from storageService binary store:', e);
+    if (docInfo.path) {
+      try {
+        const bin = await tauriBridge.readBinaryFile(docInfo.path);
+        if (bin && bin.byteLength > 0) {
+          buffer = bin;
+        }
+      } catch (err) {
+        console.warn('tauriBridge readBinaryFile error:', err);
+      }
     }
 
-    // 3. If not in persistent store, check if existingTab had cached buffer or if another tab has it
+    // 3. If not on local disk, check if existingTab had cached buffer or if another tab has it
     if (!buffer && existingTab && existingTab.data && existingTab.data.byteLength > 0) {
       buffer = existingTab.data.slice(0);
+    }
+
+    // 4. Fetch binary buffer from storage if not already loaded from disk
+    if (!buffer) {
+      try {
+        buffer = await storageService.getDocumentData(docInfo.id, docInfo.fingerprint, docInfo.name);
+      } catch (e) {
+        console.warn('Error reading from storageService binary store:', e);
+      }
     }
 
     // 4. Check if it's one of the built-in sample docs (by ID, fingerprint, or name)
@@ -724,6 +780,19 @@ export default function App() {
 
       // Clean up memory from pdfEngine for all closing tabs to prevent memory leaks
       tabIds.forEach((id) => pdfEngine.unloadDocument(id));
+
+      // ZERO-STORAGE CONSUMPTION: Auto-purge temporary cached binary data when closing tabs
+      if (settings.autoPurgeCacheOnTabClose !== false) {
+        tabs.filter((t) => tabIds.includes(t.id)).forEach((closingTab) => {
+          // If the document has no persistent local path or is not pinned in the permanent library, delete temporary binary from IndexedDB
+          const isInLibrary = libraryDocs.some(
+            (d) => d.id === closingTab.id || (d.fingerprint && d.fingerprint === closingTab.fingerprint)
+          );
+          if (!closingTab.doc.path || !isInLibrary) {
+            storageService.deleteDocumentData(closingTab.id, closingTab.fingerprint, closingTab.doc.name);
+          }
+        });
+      }
 
       setTabs((prevTabs) => {
         const remainingTabs = prevTabs.filter((t) => !tabIds.includes(t.id));
@@ -1145,7 +1214,7 @@ export default function App() {
           prev.map((t) => (t.id === activeTabId ? { ...t, isDirty: true, annotations: updated } : t))
         );
       }
-      addToast(`Undid: ${action.description}`, 'info', 'Redo', handleRedo);
+      addToast(`Undid: ${action.description}`, 'info', 'Redo', () => handleRedoRef.current());
     } else if (action.type === 'delete_annotation' && action.annotation) {
       // Inverse: restore the annotation
       storageService.addAnnotation(currentDoc.fingerprint, action.annotation);
@@ -1157,7 +1226,7 @@ export default function App() {
           prev.map((t) => (t.id === activeTabId ? { ...t, isDirty: true, annotations: updated } : t))
         );
       }
-      addToast(`Restored: ${action.description}`, 'info', 'Undo', handleUndo);
+      addToast(`Restored: ${action.description}`, 'info', 'Undo', () => handleUndoRef.current());
     }
   }, [currentDoc, activeTabId, addToast]);
 
@@ -1179,7 +1248,7 @@ export default function App() {
           prev.map((t) => (t.id === activeTabId ? { ...t, isDirty: true, annotations: updated } : t))
         );
       }
-      addToast(`Redid: ${action.description}`, 'info', 'Undo', handleUndo);
+      addToast(`Redid: ${action.description}`, 'info', 'Undo', () => handleUndoRef.current());
     } else if (action.type === 'delete_annotation' && action.annotation) {
       // Re-apply: delete the annotation
       storageService.deleteAnnotation(currentDoc.fingerprint, action.annotation.id);
@@ -1191,9 +1260,12 @@ export default function App() {
           prev.map((t) => (t.id === activeTabId ? { ...t, isDirty: true, annotations: updated } : t))
         );
       }
-      addToast(`Redid: ${action.description}`, 'info', 'Undo', handleUndo);
+      addToast(`Redid: ${action.description}`, 'info', 'Undo', () => handleUndoRef.current());
     }
   }, [currentDoc, activeTabId, addToast]);
+
+  handleUndoRef.current = handleUndo;
+  handleRedoRef.current = handleRedo;
 
   // File Save Handlers
   const handleSaveFile = async () => {
@@ -1290,7 +1362,7 @@ export default function App() {
       );
     }
 
-    addToast(desc, 'info', 'Undo', handleUndo);
+    addToast(desc, 'info', 'Undo', () => handleUndoRef.current());
   };
 
   const handleDeleteAnnotation = (annotationId: string) => {
@@ -1309,7 +1381,7 @@ export default function App() {
         pageNumber: toDelete.pageNumber
       });
       setHistoryVersion((v) => v + 1);
-      addToast(desc, 'info', 'Undo', handleUndo);
+      addToast(desc, 'info', 'Undo', () => handleUndoRef.current());
     }
 
     pdfSaveService.markDirty(currentDoc.fingerprint);
@@ -1486,7 +1558,8 @@ export default function App() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (
         document.activeElement?.tagName === 'INPUT' ||
-        document.activeElement?.tagName === 'TEXTAREA'
+        document.activeElement?.tagName === 'TEXTAREA' ||
+        (document.activeElement as HTMLElement)?.isContentEditable
       ) {
         return;
       }
@@ -1843,6 +1916,7 @@ export default function App() {
               onSearchQueryChange={handleSearchQueryChange}
               onDeleteBookmark={handleDeleteBookmark}
               onDeleteAnnotation={handleDeleteAnnotation}
+              onRequestThumbnail={handleRequestThumbnail}
               onClose={() => handleUpdateSettings({ showSidebar: false })}
             />
 

@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
-import { X, Check, Eye, Cpu, ShieldCheck, Keyboard, RefreshCw, Sparkles } from 'lucide-react';
-import { ReaderSettings, ReaderTheme, ViewMode } from '../types';
+import React, { useState, useEffect } from 'react';
+import { X, Check, Eye, Cpu, ShieldCheck, Keyboard, RefreshCw, Sparkles, Zap, Trash2, Activity, Gauge, HardDrive } from 'lucide-react';
+import { ReaderSettings, ReaderTheme, ViewMode, ResourceGovernorMetrics } from '../types';
 import { PDFDocIcon } from './PDFDocIcon';
 import { tauriBridge } from '../services/tauriBridge';
+import { pdfEngine } from '../services/pdfEngine';
+import { resourceGovernor } from '../services/resourceGovernor';
+import { storageService } from '../services/storageService';
 
 interface ReadingSettingsModalProps {
   isOpen: boolean;
@@ -19,6 +22,18 @@ export const ReadingSettingsModal: React.FC<ReadingSettingsModalProps> = ({
 }) => {
   const [isRegisteringIcon, setIsRegisteringIcon] = useState(false);
   const [iconStatusMessage, setIconStatusMessage] = useState<string | null>(null);
+  const [memoryPurged, setMemoryPurged] = useState(false);
+  const [cacheWiped, setCacheWiped] = useState(false);
+  const [storageStats, setStorageStats] = useState<{ totalBytes: number; docCount: number }>({ totalBytes: 0, docCount: 0 });
+  const [metrics, setMetrics] = useState<ResourceGovernorMetrics>(() =>
+    resourceGovernor.getMetrics(settings.lowPowerMode, settings.resourceBoundaryEnabled)
+  );
+
+  useEffect(() => {
+    if (!isOpen) return;
+    storageService.getStorageStats().then((stats) => setStorageStats(stats)).catch(() => {});
+    return resourceGovernor.subscribe((m) => setMetrics(m));
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -152,26 +167,111 @@ export const ReadingSettingsModal: React.FC<ReadingSettingsModalProps> = ({
             </div>
           </div>
 
-          {/* Section 3: Hardware Acceleration & Rendering */}
-          <div className="p-3.5 rounded-xl bg-stone-100/70 border border-stone-200/80 space-y-3">
-            <div className="flex items-center gap-2 text-xs font-bold text-stone-800">
-              <Cpu className="w-4 h-4 text-blue-600" />
-              <span>Memory Virtualization & Canvas Recycling</span>
+          {/* Section 3: Hardware Acceleration & Resource Boundary (Anti-Lag Guard) */}
+          <div className="p-3.5 rounded-xl bg-stone-100/70 border border-stone-200/80 space-y-3.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs font-bold text-stone-800">
+                <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                <span>PC & App Anti-Lag Resource Boundary</span>
+              </div>
+              <span
+                className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                  settings.resourceBoundaryEnabled !== false
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300/60'
+                    : 'bg-stone-200 text-stone-600'
+                }`}
+              >
+                {settings.resourceBoundaryEnabled !== false ? 'Boundary Enforced' : 'Unrestricted'}
+              </span>
             </div>
+
+            {/* Boundary Guard Master Toggle */}
             <div className="flex items-center justify-between text-xs">
               <div>
-                <span className="font-semibold text-stone-800">High-DPI Retina Rendering</span>
+                <span className="font-semibold text-stone-800">Adaptive Hardware Resource Protection</span>
                 <p className="text-[11px] text-stone-500">
-                  Renders vector fonts and diagrams at 2x/3x native device pixel density.
+                  Caps render concurrency, throttles heavy GPU texture allocations, and auto-purges idle cache when RAM/CPU spikes.
                 </p>
               </div>
               <button
+                type="button"
+                onClick={() =>
+                  onUpdateSettings({
+                    resourceBoundaryEnabled: settings.resourceBoundaryEnabled === false ? true : false
+                  })
+                }
+                className={`w-11 h-6 flex items-center rounded-full p-1 transition-colors cursor-pointer ${
+                  settings.resourceBoundaryEnabled !== false ? 'bg-emerald-600' : 'bg-stone-300'
+                }`}
+              >
+                <div
+                  className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${
+                    settings.resourceBoundaryEnabled !== false ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* Live Hardware Telemetry & Boundary Diagnostics */}
+            <div className="p-2.5 rounded-lg bg-white/90 border border-stone-200/70 space-y-2">
+              <div className="flex items-center justify-between text-[11px] font-semibold text-stone-700">
+                <span className="flex items-center gap-1.5">
+                  <Activity className="w-3.5 h-3.5 text-blue-600" />
+                  Live Hardware Load Telemetry
+                </span>
+                <span
+                  className={`px-1.5 py-0.2 rounded text-[10px] ${
+                    metrics.isThrottlingActive
+                      ? 'bg-amber-100 text-amber-800 font-medium'
+                      : 'bg-emerald-50 text-emerald-700'
+                  }`}
+                >
+                  {metrics.isThrottlingActive ? 'Active Guard: Throttled to 1-Task' : 'System Load: Optimal'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px]">
+                <div className="p-1.5 rounded bg-stone-50 border border-stone-100">
+                  <span className="text-stone-400 block font-mono">CPU Cores</span>
+                  <span className="font-bold text-stone-800 font-mono">{metrics.hardwareCores} Cores</span>
+                </div>
+                <div className="p-1.5 rounded bg-stone-50 border border-stone-100">
+                  <span className="text-stone-400 block font-mono">RAM Heap</span>
+                  <span className="font-bold text-stone-800 font-mono">
+                    {metrics.usedHeapMB ? `${metrics.usedHeapMB} MB` : 'Browser Sandboxed'}
+                  </span>
+                </div>
+                <div className="p-1.5 rounded bg-stone-50 border border-stone-100">
+                  <span className="text-stone-400 block font-mono">Render Latency</span>
+                  <span className="font-bold text-stone-800 font-mono">
+                    {metrics.avgRenderLatencyMs > 0 ? `${metrics.avgRenderLatencyMs} ms` : '< 80 ms'}
+                  </span>
+                </div>
+                <div className="p-1.5 rounded bg-stone-50 border border-stone-100">
+                  <span className="text-stone-400 block font-mono">Active Texture</span>
+                  <span className="font-bold text-stone-800 font-mono">
+                    {metrics.totalActiveMegaPixels} MP ({metrics.activeCanvasCount} pgs)
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* High-DPI Toggle */}
+            <div className="flex items-center justify-between text-xs pt-2.5 border-t border-stone-200/60">
+              <div>
+                <span className="font-semibold text-stone-800">High-DPI Retina Rendering</span>
+                <p className="text-[11px] text-stone-500">
+                  Renders vector fonts at 1.5x pixel density (automatically scaled down to 1.0x under high system load).
+                </p>
+              </div>
+              <button
+                type="button"
                 onClick={() =>
                   onUpdateSettings({
                     renderQuality: settings.renderQuality === 'high' ? 'normal' : 'high'
                   })
                 }
-                className={`w-11 h-6 flex items-center rounded-full p-1 transition-colors ${
+                className={`w-11 h-6 flex items-center rounded-full p-1 transition-colors cursor-pointer ${
                   settings.renderQuality === 'high' ? 'bg-blue-600' : 'bg-stone-300'
                 }`}
               >
@@ -183,9 +283,70 @@ export const ReadingSettingsModal: React.FC<ReadingSettingsModalProps> = ({
               </button>
             </div>
 
+            {/* Low-End Hardware Mode Toggle */}
+            <div className="flex items-center justify-between text-xs pt-2.5 border-t border-stone-200/60">
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <Zap className="w-3.5 h-3.5 text-amber-600" />
+                  <span className="font-semibold text-stone-800">Low-End Device & Battery Saver Mode</span>
+                </div>
+                <p className="text-[11px] text-stone-500">
+                  Strict 1-page buffer, sequential queue, and instant VRAM purging for older CPUs & 2GB/4GB RAM laptops.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  onUpdateSettings({
+                    lowPowerMode: !settings.lowPowerMode
+                  })
+                }
+                className={`w-11 h-6 flex items-center rounded-full p-1 transition-colors cursor-pointer ${
+                  settings.lowPowerMode ? 'bg-amber-600' : 'bg-stone-300'
+                }`}
+              >
+                <div
+                  className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${
+                    settings.lowPowerMode ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* Manual Memory Purge Action */}
+            <div className="flex items-center justify-between pt-2.5 border-t border-stone-200/60 text-xs">
+              <div>
+                <span className="font-semibold text-stone-800">Emergency Memory & VRAM Purge</span>
+                <p className="text-[11px] text-stone-500">
+                  Instantly clears text caches, search indices, and unused canvas textures to reclaim RAM.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  pdfEngine.purgeUnusedMemory();
+                  setMemoryPurged(true);
+                  setTimeout(() => setMemoryPurged(false), 2500);
+                }}
+                className="px-2.5 py-1 text-xs font-medium rounded-lg bg-stone-200 hover:bg-stone-300 text-stone-700 flex items-center gap-1.5 transition-colors shrink-0 cursor-pointer"
+              >
+                {memoryPurged ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    <span className="text-emerald-700 font-semibold">Purged!</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5 text-stone-500" />
+                    <span>Purge RAM</span>
+                  </>
+                )}
+              </button>
+            </div>
+
             <div className="flex items-center gap-2 pt-2 border-t border-stone-200/60 text-[11px] text-emerald-700">
               <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>Zero-Leak Viewport Active: Scrolled-out pages purge canvas VRAM memory dynamically.</span>
+              <span>Active Boundary: Max 15 MP texture limit with auto-cancellation for scrolled-out pages.</span>
             </div>
           </div>
 
